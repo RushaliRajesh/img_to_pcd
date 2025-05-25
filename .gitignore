@@ -1,0 +1,12 @@
+/data
+/plots_dir
+/.ipynb_checkpoints
+/runs
+/saved_models
+/SBR
+/shrec_data
+/train_loop_plots
+/__MACOSX
+/__pycache__
+domain_ada_codes
+SHREC2014_SBR.zip
