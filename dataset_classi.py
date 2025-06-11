@@ -15,6 +15,8 @@ from functools import lru_cache
 from natsort import natsorted
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
+#import to tensor
+from torchvision.transforms import ToTensor 
 
 def read_classification_file(filename, flag, class_path):
     # print("in here")
@@ -172,6 +174,62 @@ def pairing(sketch_models, models_3d):
             pairs.append((i, pos_ind, class_name, sk_class_id))
 
     return pairs  
+
+
+class ShapeData_notransform(Dataset):
+    def __init__(self, sketch_dir, model_dir, sketch_file, model_file, pairs, label = "train",transform=None):
+        self.sketch_dir = sketch_dir
+        self.model_dir = model_dir
+        self.transform = transform
+        self.sketch_models, self.sketch_N = sketch_file
+        self.models_3d, self.N_3d = model_file
+        self.label = label
+        self.pairs = pairs                 
+
+    def __len__(self):
+        return len(self.pairs)
+    
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_mesh(path):
+        # print(f"Loading from disk: {path}")
+        mesh = np.load(path)
+        return mesh
+
+    def __getitem__(self, index):
+
+        sketch_id, model_id, class_name, target = self.pairs[index]
+        # print("skt_id: ", sketch_id, "model_id: ", model_id, "class_name: ", class_name, "target: ", target)
+        sketch_path = os.path.join(self.sketch_dir, f"{class_name}/{self.label}/{sketch_id}.png")
+        model_path = os.path.join(self.model_dir, f"M{model_id}.npy")
+
+        # sketch = Image.open(sketch_path).convert("RGB")
+        # mesh = o3d.io.read_triangle_mesh(model_path)
+        sketch = self.load_image(sketch_path)
+        mesh = self.load_mesh(model_path)
+        if len(mesh) == 0:
+            return None, None, None
+        # vertices_np = np.asarray(mesh.vertices)
+        # pcd.points = o3d.utility.Vector3dVector(vertices_np)
+
+        #normalise the pcd
+        mesh = mesh - mesh.mean(axis=0)
+        mesh = mesh/np.linalg.norm(mesh, axis=1).max()
+
+        sketch = ToTensor()(sketch)
+        # if self.transform:
+        #     # print("transforming")
+        #     # print(np.array(sketch).max(), np.array(sketch).min())
+        #     sketch = self.transform(sketch)
+
+        return (sketch, torch.tensor(mesh), torch.tensor(target))
 
 
 class ShapeData(Dataset):

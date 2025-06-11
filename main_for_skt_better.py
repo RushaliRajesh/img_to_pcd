@@ -13,16 +13,16 @@ import sys
 import numpy as np 
 from itertools import product
 from torch.utils.data import DataLoader 
-from dataset_classi import ShapeData_skt, ShapeData_3d, ShapeData, pairing, read_classification_file 
+from dataset_classi import ShapeData_notransform, ShapeData, pairing, read_classification_file 
 from loss_util import ContrastiveLoss
-from model_vpt_vit import BeitClassifier
+from model_vpt_vit import BeitClassifier_morelayers, Convclassi
 import pdb
 from torch.utils.tensorboard import SummaryWriter
 import yaml
 from fvcore.common.config import CfgNode as _CfgNode
 import torchvision.transforms.functional as TF
 
-keyword = "sketch_beit_large_batch"
+keyword = "sketch_beit_customcnn"
 writer = SummaryWriter(f'runs/{keyword}')
 
 file = "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/sketches/SHREC14LSSTB_SKETCHES/SHREC14_SBR_models_train.cla"
@@ -42,7 +42,7 @@ all_class_list_model = np.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shr
 transform_img = transforms.Compose([
         transforms.Resize((224, 224)),  # Resize to match ResNet input size
         transforms.ToTensor(),
-        transforms.Normalize(mean=[128, 128, 128], std=[64, 64, 64])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
 
@@ -93,15 +93,32 @@ te_dataset = ShapeData(
 print("tr dataset: ", len(tr_dataset))
 print("te dataset: ", len(te_dataset))
 
-tr_data_loader = DataLoader(tr_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True)
-te_data_loader = DataLoader(te_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True)
+tr_data_loader = DataLoader(tr_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
+te_data_loader = DataLoader(te_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
 
+tr_data_sub = torch.utils.data.Subset(tr_dataset, range(0, 100))  
+te_data_sub = torch.utils.data.Subset(te_dataset, range(0, 60))
+
+# for i in tr_data_sub:
+#     print(i)
+# pdb.set_trace()
+
+tr_data_loader = DataLoader(tr_data_sub, batch_size=8, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
+te_data_loader = DataLoader(te_data_sub, batch_size=8, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
+all_labels = torch.cat([target for _, _, target in tr_data_loader])
+uni = all_labels.unique()
+label_map = {uni[i].item(): i for i in range(len(uni))}
 
 for i in tr_data_loader:
     print("tr_data_loader shape: ")
     print(i[0].shape, i[1].shape, i[2].shape)
     # print(i)
+    # if len(i[2].unique()) != 2:
+    #     print("skipping")
+    #     continue
+    # uni = i[2].unique()
     break
+
 
 # pdb.set_trace()
 
@@ -115,11 +132,11 @@ print("tr_data_loader: ", len(tr_data_loader))
 print("te_data_loader: ", len(te_data_loader))
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-model_skt = BeitClassifier().to(device)
+model_skt = Convclassi().to(device)
 
 optimizer = torch.optim.Adam(model_skt.parameters(), lr=0.001)
 ce_loss = torch.nn.CrossEntropyLoss()
-num_epochs = 20
+num_epochs = 30
 
 # tr_loader_length = sum(1 for _ in tr_data_loader())
 # te_loader_length = sum(1 for _ in te_data_loader())
@@ -167,34 +184,56 @@ for epoch in tqdm(range(num_epochs)):
     for ind,(sketches, pcds, target) in enumerate(tr_data_loader):
         sketches = sketches.float().to(device)
         label = target.to(device)
+        # pdb.set_trace()
+        
+        label_map = {uni[0].item(): 0, uni[1].item(): 1}
+        label = torch.tensor([label_map[int(l)] for l in label.tolist()], dtype=torch.long).to(device)
+
+        
+        bef_grad = sum(p.grad.norm() for p in model_skt.parameters() if p.grad is not None)
+        # for p in model_skt.parameters():
+        #     if p.grad is None:
+        #         print(f"Parameter {p} has no gradient: ", p.grad, flush=True)
+
 
         optimizer.zero_grad()
         # pdb.set_trace()
         outputs = model_skt(sketches)
         loss = ce_loss(outputs, label)
         loss.backward()
+        print()
+        print(f"Loss: {loss.item()}", flush=True)
+        print()
         optimizer.step()
+
+        aft_grad = sum(p.grad.norm() for p in model_skt.parameters() if p.grad is not None)
+        print(f"Before gradient norm: {bef_grad}, After gradient norm: {aft_grad}", flush=True)
+        
         tr_loss += loss.item()
         tr_acc += (outputs.argmax(dim=1) == label).float().sum().item()
         # pdb.set_trace()
         #print total number of trainable params
         if ind == 0:
-            print(sum(p.numel() for p in model_skt.parameters() if p.requires_grad), flush=True)
+            # print(sum(p.numel() for p in model_skt.parameters() if p.requires_grad), flush=True)
             print(sketches.shape, sketches.min(), sketches.max(), flush=True)
             print("labels: ", label, flush=True)
             print("outputs: ", outputs.argmax(dim=1), flush=True)
-            path = f"/nlsasfs/home/neol/rushar/scripts/img_to_pcd/train_loop_plots/{keyword}"
-            if not os.path.exists(path):
-                os.makedirs(path)
-            show_batch(sketches, label, save_path=f"{path}/epoch_{epoch}.png")
-            # show_batch(sketches[:2], label[:2], save_path=f"/nlsasfs/home/neol/rushar/scripts/img_to_pcd/train_loop_plots/{keyword}_debug_batch_{epoch}.png")
-
+            # path = f"/nlsasfs/home/neol/rushar/scripts/img_to_pcd/train_loop_plots/{keyword}"
+            # if not os.path.exists(path):
+            #     os.makedirs(path)
+            # show_batch(sketches[:2], label[:2], save_path=f"{path}/epoch_tr_{epoch}.png")
+            
+    all_labels = torch.cat([target for _, _, target in te_data_loader])
+    uni = all_labels.unique()
+    label_map = {uni[i].item(): i for i in range(len(uni))}
     model_skt.eval()
-    with torch.no_grad():   
+    with torch.no_grad():
         for ind, (sketches, pcds, target) in enumerate(te_data_loader):
             sketches = sketches.float().to(device)
-            label = target.to(device)  
+            label = target.to(device)
+            label = torch.tensor([label_map[int(l)] for l in label.tolist()], dtype=torch.long).to(device)
             
+
             outputs = model_skt(sketches)
             loss = ce_loss(outputs, label)
             val_loss += loss.item()
@@ -204,8 +243,11 @@ for epoch in tqdm(range(num_epochs)):
                 print(sketches.shape, sketches.min(), sketches.max(), flush=True)
                 print("labels: ", label, flush=True)
                 print("outputs: ", outputs.argmax(dim=1), flush=True)
-                show_batch(sketches[:2], label[:2], save_path=f"/nlsasfs/home/neol/rushar/scripts/img_to_pcd/train_loop_plots/debug_batch_val_{epoch}.png")
-
+                path = f"/nlsasfs/home/neol/rushar/scripts/img_to_pcd/train_loop_plots/{keyword}"
+                # if not os.path.exists(path):
+                #     os.makedirs(path)
+                # show_batch(sketches[:2], label[:2], save_path=f"{path}/epoch_val_{epoch}.png")
+                
     print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {tr_loss/len(tr_data_loader):.4f}, Val Loss: {val_loss/len(te_data_loader):.4f}, train_acc: {tr_acc/len(tr_data_loader.dataset):.4f}, val_acc: {val_acc/len(te_data_loader.dataset):.4f}", flush=True)
 
 

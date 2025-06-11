@@ -135,8 +135,8 @@ te_dataset = ShapeData(
 print("tr dataset: ", len(tr_dataset))
 print("te dataset: ", len(te_dataset))
 
-tr_data_loader = DataLoader(tr_dataset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
-te_data_loader = DataLoader(te_dataset, batch_size=16, shuffle=True, num_workers=0, pin_memory=True)
+tr_data_loader = DataLoader(tr_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True)
+te_data_loader = DataLoader(te_dataset, batch_size=48, shuffle=True, num_workers=0, pin_memory=True)
 # tr_model_loader = DataLoader(tr_3d_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
 # te_model_loader = DataLoader(te_3d_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
   

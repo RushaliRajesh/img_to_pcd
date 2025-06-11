@@ -188,6 +188,53 @@ def pairing(sketch_models, models_3d):
     return pairs  
 
 
+
+
+def lim_pairing(sketch_models, models_3d):
+    pairs = []
+    all_classes = set(sketch_models.keys()) & set(models_3d.keys())
+
+    for class_name in all_classes:
+        # print("class_name: ", class_name)
+        
+        '''verification'''
+        id_file = np.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/sketch_classes.npy")
+        verification_id = int(np.where(id_file == class_name)[0][0])
+        sk_class_id = int(np.array(sketch_models[class_name])[:,1][0])
+        pc_class_id = int(np.array(models_3d[class_name])[:,1][0])
+        if verification_id != sk_class_id or verification_id != pc_class_id:
+            print(verification_id, sk_class_id, pc_class_id)
+            print(type(verification_id), type(sk_class_id), type(pc_class_id))
+            print("Verification id mismatch")
+            sys.exit()
+        '''done!'''
+        
+        sketch_ids = np.array(sketch_models[class_name])[:,0]
+        model_ids = np.array(models_3d[class_name])[:,0]
+        if len(model_ids) < 50:
+                continue  
+        # print("model_ids: ", model_ids)
+        
+        for i in sketch_ids:
+            pos_ind = random.choice(model_ids)
+            # print("pos_ind: ", pos_ind)
+            pairs.append((i, pos_ind, class_name, sk_class_id,0))
+
+        #negative pairs (target = 1)
+        neg_classes = all_classes - {class_name}
+        for i in sketch_ids:
+            neg_cls = random.choice(list(neg_classes))
+            # print("neg_cls: ", neg_cls)
+            # print("model_ids neg: ", models_3d[neg_cls])     
+            if len(models_3d[neg_cls]) == 0:
+                continue             
+            neg_ind = random.choice(models_3d[neg_cls])[0]
+            # print("neg_ind: ", neg_ind)
+            pairs.append((i, neg_ind, class_name, sk_class_id, 1)) 
+
+    return pairs 
+
+
 class ShapeData(Dataset):
     def __init__(self, sketch_dir, model_dir, sketch_file, model_file, pairs, label = "train",transform=None):
         self.sketch_dir = sketch_dir
@@ -238,7 +285,7 @@ class ShapeData(Dataset):
 
         #normalise the pcd
         mesh = mesh - mesh.mean(axis=0)
-        mesh = mesh/np.linalg.norm(mesh, axis=1).max()
+        mesh = mesh/max(np.linalg.norm(mesh, axis=1).max(), 1e-8)
 
         # pcd_visu = o3d.geometry.PointCloud()
         # pcd_visu.points = o3d.utility.Vector3dVector(mesh)

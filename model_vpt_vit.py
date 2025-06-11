@@ -83,13 +83,58 @@ class BeitClassifier(nn.Module):
         # pdb.set_trace()
 
     def forward(self, img):
-        img = self.processor(images=img, return_tensors="pt").pixel_values
+        img = self.processor(images=img, return_tensors="pt").pixel_values.to(self.model.device)
         img = self.model(img)
         return img.logits
 
+
+class Convclassi(nn.Module):
+    def __init__(self):
+        super(Convclassi, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.linear1 = nn.Linear(401408, 512)
+        self.linear2 = nn.Linear(512, 2)
+        #401408x512
+        #8x9821312
+    def forward(self, img):
+        x = F.relu(self.conv1(img))
+        x = F.max_pool2d(x, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2)
+        # x = x.view(x.size(0), -1)
+        x = torch.flatten(x, 1)  
+        x = F.relu(self.linear1(x))
+        x = self.linear2(x)
+        return x
+
+
+class BeitClassifier_morelayers(nn.Module):
+    def __init__(self):
+        super(BeitClassifier_morelayers, self).__init__()
+        self.processor = BeitImageProcessor.from_pretrained('kmewhort/beit-sketch-classifier')
+        self.model = BeitForImageClassification.from_pretrained('kmewhort/beit-sketch-classifier')
+        for params in self.model.parameters():
+            params.requires_grad = True
+        self.model.classifier = torch.nn.Linear(768, 171)
+        # for params in self.model.classifier.parameters():
+        #     params.requires_grad = True
+        # for param in self.model.beit.encoder.layer[-1].parameters():
+        #     param.requires_grad = True
+        # for param in self.model.beit.pooler.parameters():
+        #     param.requires_grad = True
+        # pdb.set_trace()
+
+    def forward(self, img):
+        # img = self.processor(images=img, return_tensors="pt").pixel_values.to(self.model.device)
+        img = self.model(img)
+        return img.logits
+
+
 if __name__ == "__main__":
     # model = OnlyVIT()
-    model = BeitClassifier()
+    # model = BeitClassifier()
+    model = BeitClassifier_morelayers()
     out = model(torch.randn(1, 3, 224, 224))
     # print(out.shape)
     for n,p in model.named_parameters():
