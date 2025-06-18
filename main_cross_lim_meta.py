@@ -43,7 +43,8 @@ import os
 import pdb
 from torch.utils.tensorboard import SummaryWriter
 
-keyword = "conti_cross_lim_models"
+
+keyword = "cross_lim_meta"
 writer = SummaryWriter(f'runs/{keyword}')
 
 B =16
@@ -171,14 +172,13 @@ cfg.freeze()
 
 # model = ModelCombi_norm_perci(cfg)
 model = ModelCombi_cross_perci(cfg=cfg, bs = B, adapter=False)
-model.load_state_dict(torch.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_lim_models/model_39.pt"))
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.to(device)
 print("device: ", device)
-num_epochs = 80
+num_epochs = 40
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER

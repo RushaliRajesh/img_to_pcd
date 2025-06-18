@@ -35,15 +35,15 @@ import sys
 import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
-from dataset_combi import ShapeData, lim_pairing, read_classification_file 
-from loss_util import ContrastiveLoss, Cross_entropy, compute_map
+from dataset_combi import ShapeData, lim_pairing, read_classification_file, all_paths, All_shapes, All_sketches
+from loss_util import ContrastiveLoss, Cross_entropy, compute_metrics
 from model_pt_clip import ModelCombi_cross_perci
 import time
 import os
 import pdb
 from torch.utils.tensorboard import SummaryWriter
 
-keyword = "conti_cross_lim_models"
+keyword = "corrected_map_cross"
 writer = SummaryWriter(f'runs/{keyword}')
 
 B =16
@@ -132,6 +132,7 @@ te_dataset = ShapeData(
     transform=transform_img  # You can add image transformations here
 )
 
+
 # pdb.set_trace()
 print("tr dataset: ", len(tr_dataset))
 print("te dataset: ", len(te_dataset))
@@ -159,6 +160,23 @@ print("tr_data_loader: ", len(tr_data_loader))
 print("te_data_loader: ", len(te_data_loader))
 # pdb.set_trace()
 
+all_skt_paths, all_shp_paths, all_skt_labels, all_shp_labels = all_paths(
+    sketch_path = "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/sketches/sketches_unzp/SHREC14LSSTB_SKETCHES/" ,
+    sketch_dict = m_s_test_temp,
+    shape_path = "scripts/img_to_pcd/shrec_data/target3d_np",
+    shape_dict= m_te_temp
+)
+
+all_skts = All_sketches(
+    all_sketch_paths=all_skt_paths,
+    transform=transform_img
+    )
+
+all_shapes = All_shapes(
+    all_shape_paths=all_shp_paths
+    )
+                                           
+
 #load config_params.yaml
 with open('/nlsasfs/home/neol/rushar/scripts/img_to_pcd/config_params.yaml', 'r') as f:
     config_params = yaml.safe_load(f)
@@ -171,14 +189,13 @@ cfg.freeze()
 
 # model = ModelCombi_norm_perci(cfg)
 model = ModelCombi_cross_perci(cfg=cfg, bs = B, adapter=False)
-model.load_state_dict(torch.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_lim_models/model_39.pt"))
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.to(device)
 print("device: ", device)
-num_epochs = 80
+num_epochs = 40
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER
@@ -200,12 +217,10 @@ for epoch in tqdm(range(num_epochs)):
     val_acc = 0.0
     tr_acc_pc = 0.0
     val_acc_pc = 0.0
-    all_img_enc = []
-    all_pcd_enc = []
-    all_img_labels = []
-    all_pcd_labels = []
     
     for ind,(sketches, pcds, target, pos_neg_ind) in enumerate(tr_data_loader):
+        if ind==4:
+            break
         sketches = sketches.float().to(device)
         pcds = pcds.float().to(device)
         label = target.to(device)
@@ -259,6 +274,8 @@ for epoch in tqdm(range(num_epochs)):
     model.eval()
     with torch.no_grad():   
         for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader):
+            if ind==4:
+                break
             sketches = sketches.float().to(device)
             pcds = pcds.float().to(device)
             label = target.to(device)
@@ -283,25 +300,42 @@ for epoch in tqdm(range(num_epochs)):
                 print("outputs pc: ", pc_out.argmax(dim=1), flush=True)
             
             # pdb.set_trace()
-            if epoch%5==0:
+    model.eval()
+    with torch.no_grad(): 
+        if epoch % 10 == 0:
+            all_img_enc = []
+            all_pcd_enc = []
+            all_img_labels = []
+            all_pcd_labels = []
+            for skt, label in zip(all_skts, all_skt_labels):
+                sketches = sketches.float().to(device)
+                label = label.reshape(1,1)
+                sk_feat, _,_,_= model(sketches, None)
                 all_img_enc.append(sk_feat.cpu().numpy())
+                all_img_labels.append(label)
+
+            for pcd, label in zip(all_shapes, all_shp_labels):
+                pcds = pcd.float().to(device).unsqueeze(0)
+                label = label.reshape(1,1)
+                # pdb.set_trace()
+                _, _, pc_feat, _ = model(None, pcds)
                 all_pcd_enc.append(pc_feat.cpu().numpy())
-                all_img_labels.append(label.cpu().numpy())
-                all_pcd_labels.append(label.cpu().numpy())
-    if all_img_enc:
-        all_img_enc = np.concatenate(all_img_enc)
-        all_pcd_enc = np.concatenate(all_pcd_enc)
-        all_img_labels = np.concatenate(all_img_labels)
-        all_pcd_labels = np.concatenate(all_pcd_labels)
+                all_pcd_labels.append(label)                            
+        
+            all_img_enc = np.concatenate(all_img_enc)
+            all_pcd_enc = np.concatenate(all_pcd_enc)
+            all_img_labels = np.concatenate(all_img_labels)
+            all_pcd_labels = np.concatenate(all_pcd_labels)
 
-        # pdb.set_trace()
 
-        # Compute mAP
-        # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
-        mAP = compute_map(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
-                            torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
-        print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}", flush = True)
-        writer.add_scalar('mAP', mAP, epoch)
+            # Compute mAP
+            # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
+            mAP, ft, st = compute_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
+                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
+            print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}", flush = True)
+            writer.add_scalar('mAP', mAP, epoch)
+            writer.add_scalar('ft', ft, epoch)
+            writer.add_scalar('st', st, epoch)
 
     print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {tr_loss/len(tr_data_loader):.4f}, Train acc: {tr_acc/len(tr_data_loader):.4f}, Val Loss: {val_loss/len(te_data_loader):.4f}, Val acc: {val_acc/len(te_data_loader):.4f}", flush = True)
 

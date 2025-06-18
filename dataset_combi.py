@@ -15,6 +15,7 @@ from functools import lru_cache
 from natsort import natsorted
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def read_classification_file(filename, flag, class_path):
     # print("in here")
@@ -188,8 +189,6 @@ def pairing(sketch_models, models_3d):
     return pairs  
 
 
-
-
 def lim_pairing(sketch_models, models_3d):
     pairs = []
     all_classes = set(sketch_models.keys()) & set(models_3d.keys())
@@ -233,6 +232,161 @@ def lim_pairing(sketch_models, models_3d):
             pairs.append((i, neg_ind, class_name, sk_class_id, 1)) 
 
     return pairs 
+
+
+def pairing_hdf5(skt_path, model_path):
+    skt_hdf5 = pd.read_hdf(skt_path, key='sk')
+    pcd_hdf5 = pd.read_hdf(model_path, key='pcd')
+    skt_hdf5['class_id'] = skt_hdf5['cat'].astype('category').cat.codes
+    pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = skt_hdf5['cat'].astype('category'))
+    pairs = []
+    for i in skt_hdf5:
+        sk_cls = i['cat']
+        #randomly choose a model from the same class
+        pos_ind = pcd_hdf5[pcd_hdf5['cat'] == sk_cls].sample(1).index[0]
+        neg_ind = pcd_hdf5[pcd_hdf5['cat'] != sk_cls].sample(1).index[0]
+        
+
+
+
+
+def all_paths(sketch_path, sketch_dict, shape_path, shape_dict):
+    sketches = []
+    shapes = []
+    skt_labels = []
+    shp_labels = []
+
+    all_classes = np.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/sketch_classes.npy")
+    for cls in all_classes:
+        sketch_all_paths = os.path.join(sketch_path, f'{cls}/test/')
+        for skt in os.listdir(sketch_all_paths):
+            sketches.append(os.path.join(sketch_all_paths, skt))
+            skt_labels.append(np.where(all_classes == cls)[0][0])
+            
+        for pcd in shape_dict[cls]:
+            shapes.append(os.path.join(shape_path, f"M{pcd[0]}.npy"))
+            shp_labels.append(np.where(all_classes == cls)[0][0])
+
+    return sketches, shapes, skt_labels, shp_labels
+
+
+class All_sketches(Dataset):
+    def __init__(self, all_sketch_paths, transform):
+        self.all_sketch_paths = all_sketch_paths
+        self.transform = transform
+        self.sketches = []
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+    
+    def __len__(self):
+        return len(self.all_sketch_paths)
+    def __getitem__(self, index):
+        sketch_path = self.all_sketch_paths[index]
+        # print("sketch_path: ", sketch_path)
+        sketch = self.load_image(sketch_path)
+        if self.transform:
+            # print("transforming")
+            # print(np.array(sketch).max(), np.array(sketch).min())
+            sketch = self.transform(sketch)
+        return sketch
+    
+
+class All_shapes(Dataset):
+    def __init__(self, all_shape_paths):
+        self.all_shape_paths = all_shape_paths
+        self.shapes = []
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_mesh(path):
+        # print(f"Loading from disk: {path}")
+        mesh = np.load(path)
+        return mesh
+    
+    def __len__(self):
+        return len(self.all_shape_paths)
+    
+    def __getitem__(self, index):
+        shape_path = self.all_shape_paths[index]
+        # print("shape_path: ", shape_path)
+        mesh = self.load_mesh(shape_path)
+        if len(mesh) == 0:
+            return None
+        return torch.tensor(mesh)
+        
+
+class ShapeData_meta(Dataset):
+    def __init__(self, sketch_dir, model_dir, sketch_file, model_file, pairs, label = "train",transform=None):
+        self.sketch_dir = sketch_dir
+        self.model_dir = model_dir
+        self.transform = transform
+        self.sketch_models, self.sketch_N = sketch_file
+        self.models_3d, self.N_3d = model_file
+        self.label = label
+        self.pairs = pairs                 
+
+    def __len__(self):
+        return len(self.pairs)
+    
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_mesh(path):
+        # print(f"Loading from disk: {path}")
+        mesh = np.load(path)
+        return mesh
+
+    def __getitem__(self, index):
+
+        sketch_id, model_id, class_name, target, pos_neg_ind = self.pairs[index]
+        # print("skt_id: ", sketch_id, "model_id: ", model_id, "class_name: ", class_name, "target: ", target)
+        sketch_path = os.path.join(self.sketch_dir, f"{class_name}/{self.label}/{sketch_id}.png")
+        model_path = os.path.join(self.model_dir, f"M{model_id}.npy")
+
+        # sketch = Image.open(sketch_path).convert("RGB")
+        # mesh = o3d.io.read_triangle_mesh(model_path)
+        sketch = self.load_image(sketch_path)
+        mesh = self.load_mesh(model_path)
+        if len(mesh) == 0:
+            return None, None, None
+        # vertices_np = np.asarray(mesh.vertices)
+        # pcd.points = o3d.utility.Vector3dVector(vertices_np)
+
+        # pcd_visu = o3d.geometry.PointCloud()
+        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
+        # # o3d.visualization.draw_plotly([pcd_visu])
+        # o3d.io.write_point_cloud("mesh_ori.ply", pcd_visu)
+
+        #normalise the pcd
+        mesh = mesh - mesh.mean(axis=0)
+        mesh = mesh/max(np.linalg.norm(mesh, axis=1).max(), 1e-8)
+
+        # pcd_visu = o3d.geometry.PointCloud()
+        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
+        # # o3d.visualization.draw_plotly([pcd_visu])
+        # o3d.io.write_point_cloud("mesh.ply", pcd_visu)
+        # pdb.set_trace()
+        
+
+        if self.transform:
+            # print("transforming")
+            # print(np.array(sketch).max(), np.array(sketch).min())
+            sketch = self.transform(sketch)
+
+        return (sketch, torch.tensor(mesh), torch.tensor(target), torch.tensor(pos_neg_ind))
+
+    
 
 
 class ShapeData(Dataset):

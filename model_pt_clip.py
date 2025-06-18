@@ -207,23 +207,25 @@ class ModelCombi_cross_perci(nn.Module):
         self.res = torch.nn.Linear(768, 171)
 
     def forward(self, img, ptcloud):
-
-        if hasattr(self, 'adapter_skt'):
-            img = self.adapter_skt(img)
-        img_feat, img_output = self.vpt_2d(img)
-        pcds_img = self.pcviews.get_img(ptcloud)
-        pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
-        pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
-        pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        img_feat, img_output, ptcloud_feat, ptcloud_output_final = None, None, None, None
+        if img is not None:
+            if hasattr(self, 'adapter_skt'):
+                img = self.adapter_skt(img)
+            img_feat, img_output = self.vpt_2d(img)
+        if ptcloud is not None:
+            pcds_img = self.pcviews.get_img(ptcloud)
+            pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
+            pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
+            pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         
-        if hasattr(self, 'adapter_pcd'):
-            pcds_img = self.adapter_pcd(pcds_img)
-        ptcloud_feat, ptcloud_output = self.vpt_2d(pcds_img)
-        ptcloud_feat = ptcloud_feat.reshape(img.shape[0], -1, ptcloud_feat.shape[1])
-        attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
-        ptcloud_feat = ptcloud_feat.mean(dim=1)
-        ptcloud_feat = self.intermediate(ptcloud_feat)
-        ptcloud_output_final = self.res(ptcloud_feat)
+            if hasattr(self, 'adapter_pcd'):
+                pcds_img = self.adapter_pcd(pcds_img)
+            ptcloud_feat, ptcloud_output = self.vpt_2d(pcds_img)
+            ptcloud_feat = ptcloud_feat.reshape(ptcloud.shape[0], -1, ptcloud_feat.shape[1])
+            attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
+            ptcloud_feat = ptcloud_feat.mean(dim=1)
+            ptcloud_feat = self.intermediate(ptcloud_feat)
+            ptcloud_output_final = self.res(ptcloud_feat)
 
         return img_feat, img_output, ptcloud_feat, ptcloud_output_final
 
@@ -346,5 +348,6 @@ if __name__ == "__main__":
     model = ModelCombi_cross_perci(5, cfg, adapter=False)
     model = model.cuda()
     # x1, x2 = model(torch.randn(5, 3, 224, 224), torch.randn(5, 3, 500))\
-    x1, x2, x3, x4 = model(torch.randn(5, 3, 224, 224).cuda(), torch.randn(5, 500, 3).cuda())
+    # x1, x2, x3, x4 = model(torch.randn(5, 3, 224, 224).cuda(), torch.randn(5, 500, 3).cuda())
+    x1,_,_,_ = model(torch.randn(5, 3, 224, 224).cuda(), None)
     print("done")
