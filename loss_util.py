@@ -106,13 +106,14 @@ def compute_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
         average_precision = (precision_at_k * correct_matches).sum() / correct_matches.sum()
         average_precisions.append(average_precision.item())
 
-        ft.append(correct_matches.cumsum(0)[len(correct_matches) - 1] / len(correct_matches))
-        st.append(correct_matches.cumsum(0)[min(2*(len(correct_matches) - 1), len(correct_matches.cumsum(0))-1)] / len(correct_matches))
+        ft.append((correct_matches.cumsum(0)[len(correct_matches) - 1] / len(correct_matches)).item())
+        st.append((correct_matches.cumsum(0)[min(2*(len(correct_matches) - 1), len(correct_matches.cumsum(0))-1)] / len(correct_matches)).item())
 
     # Compute mean average precision
     map_value = sum(average_precisions) / num_queries 
     ft_value = sum(ft) / num_queries
     st_value = sum(st) / num_queries
+    # pdb.set_trace()
 
     return map_value, ft_value, st_value
 

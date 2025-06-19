@@ -3,7 +3,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --partition=airawatp   # GPU partition
 #SBATCH --gres=gpu:A100-SXM4:1 # Request 1 A100 GPU
-#SBATCH --time=25:00:00        
+#SBATCH --time=20:00:00        
 #SBATCH --error=outputs/job.%J.err     # Error log (J = job ID)
 #SBATCH --output=outputs/job.%J.out    # Output log
 
@@ -22,7 +22,8 @@ cd $SLURM_SUBMIT_DIR
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_conti_model.py
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_lim_models.py
 
-python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cor_map_cross.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cor_map_cross.py
+python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_lim_meta.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_conti_model.py
 

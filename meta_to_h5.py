@@ -88,6 +88,8 @@ def split_models(df_sk, df_cad, df_pcds):
     # randomly split instances
     np.random.seed(1234)
     new_df_cad.loc[:, 'split'] = 'train'
+    new_df_pcds.loc[:, 'split'] = 'train'
+    # pdb.set_trace()
     for c, n in zip(coi, n_coi):
         to_select = int(np.floor(n * 0.2))
         subset = new_df_cad.loc[new_df_cad['cat'] == c, 'id']

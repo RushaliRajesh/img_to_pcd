@@ -234,20 +234,33 @@ def lim_pairing(sketch_models, models_3d):
     return pairs 
 
 
-def pairing_hdf5(skt_path, model_path):
+def pairing_hdf5(skt_path, model_path, label):
+    
     skt_hdf5 = pd.read_hdf(skt_path, key='sk')
+    skt_hdf5 = skt_hdf5[skt_hdf5['split'] == label]
     pcd_hdf5 = pd.read_hdf(model_path, key='pcd')
-    skt_hdf5['class_id'] = skt_hdf5['cat'].astype('category').cat.codes
-    pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = skt_hdf5['cat'].astype('category'))
+    pcd_hdf5 = pcd_hdf5[pcd_hdf5['split'] == label]
+    all_classes = list(set(skt_hdf5['cat']) & set(pcd_hdf5['cat']))
+    all_classes = pd.Categorical(all_classes)
+    skt_hdf5['class_id'] = pd.Categorical(skt_hdf5['cat'], categories = all_classes).codes
+    pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = all_classes).codes
     pairs = []
-    for i in skt_hdf5:
-        sk_cls = i['cat']
+    
+    for i in skt_hdf5.itertuples():
+        sk_cls = i.cat
+        sk_cls_id = pd.Categorical([sk_cls], categories = all_classes).codes[0]
         #randomly choose a model from the same class
-        pos_ind = pcd_hdf5[pcd_hdf5['cat'] == sk_cls].sample(1).index[0]
-        neg_ind = pcd_hdf5[pcd_hdf5['cat'] != sk_cls].sample(1).index[0]
+        pos_ind = pcd_hdf5[pcd_hdf5['cat'] == sk_cls].sample(1)
+        neg_ind = pcd_hdf5[pcd_hdf5['cat'] != sk_cls].sample(1)
+        pcd_cls_id_pos = pd.Categorical([pos_ind['cat'].values[0]], categories = all_classes).codes[0]
+        pcd_cls_id_neg = pd.Categorical([neg_ind['cat'].values[0]], categories = all_classes).codes[0]
+        # pdb.set_trace()
+        pairs.append((i.Index, pos_ind.index[0], sk_cls_id, 
+                     pcd_cls_id_pos, i.cat, pos_ind['cat'][0], 0))  # 0 for positive pair
+        pairs.append((i.Index, neg_ind.index[0], sk_cls_id,
+                     pcd_cls_id_neg, i.cat, neg_ind['cat'][0], 1))
         
-
-
+    return pairs, skt_hdf5, pcd_hdf5
 
 
 def all_paths(sketch_path, sketch_dict, shape_path, shape_dict):
@@ -320,15 +333,10 @@ class All_shapes(Dataset):
         return torch.tensor(mesh)
         
 
-class ShapeData_meta(Dataset):
-    def __init__(self, sketch_dir, model_dir, sketch_file, model_file, pairs, label = "train",transform=None):
-        self.sketch_dir = sketch_dir
-        self.model_dir = model_dir
-        self.transform = transform
-        self.sketch_models, self.sketch_N = sketch_file
-        self.models_3d, self.N_3d = model_file
-        self.label = label
-        self.pairs = pairs                 
+class ShapeData_meta_h5(Dataset):
+    def __init__(self, pairs, transform=None):
+        self.pairs = pairs 
+        self.transform = transform                
 
     def __len__(self):
         return len(self.pairs)
@@ -349,10 +357,12 @@ class ShapeData_meta(Dataset):
 
     def __getitem__(self, index):
 
-        sketch_id, model_id, class_name, target, pos_neg_ind = self.pairs[index]
-        # print("skt_id: ", sketch_id, "model_id: ", model_id, "class_name: ", class_name, "target: ", target)
-        sketch_path = os.path.join(self.sketch_dir, f"{class_name}/{self.label}/{sketch_id}.png")
-        model_path = os.path.join(self.model_dir, f"M{model_id}.npy")
+        sketch_path, model_path, skt_cls_id, pcd_cls_id, skt_class, pcd_class, pos_neg_ind = self.pairs[index]
+
+        if skt_cls_id != pcd_cls_id and pos_neg_ind == 0:
+            print("sketch class id and pcd class id do not match")
+            print("sketch class id: ", skt_cls_id, "pcd class id: ", pcd_cls_id)
+            sys.exit()
 
         # sketch = Image.open(sketch_path).convert("RGB")
         # mesh = o3d.io.read_triangle_mesh(model_path)
@@ -384,9 +394,7 @@ class ShapeData_meta(Dataset):
             # print(np.array(sketch).max(), np.array(sketch).min())
             sketch = self.transform(sketch)
 
-        return (sketch, torch.tensor(mesh), torch.tensor(target), torch.tensor(pos_neg_ind))
-
-    
+        return (sketch, torch.tensor(mesh), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
 
 
 class ShapeData(Dataset):
@@ -458,6 +466,12 @@ class ShapeData(Dataset):
     
 
 if __name__ == "__main__":
+    
+    sk_path = "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5"
+    pcd_path = "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5"
+    pairs = pairing_hdf5(sk_path, pcd_path)
+    pdb.set_trace()
+
 
     #make class lists
 
