@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 from torchvision.transforms import ToTensor 
 
 def read_classification_file(filename, flag, class_path):
-    # print("in here")
+    # print("in here") 
     if flag == "models":
         class_data = np.load(class_path)
         

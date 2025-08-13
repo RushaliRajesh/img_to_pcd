@@ -14,7 +14,7 @@ import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
 from dataset_classi import ShapeData_skt, ShapeData_3d, ShapeData, pairing, read_classification_file 
-from loss_util import ContrastiveLoss
+from loss_util import ContrastiveLoss 
 from model_classi import basicmodel
 import pdb
 from torch.utils.tensorboard import SummaryWriter

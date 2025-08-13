@@ -51,4 +51,4 @@ python train_cls.py train \
 	--decoder_num_heads 16 \
 	--checkpoint "./checkpoints/shapenet_pretrain.pkl" \
 	--num_warmup_steps "2" \
-	--dim 768
+	--dim 768 

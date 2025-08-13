@@ -174,7 +174,7 @@ def compute_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
     # pdb.set_trace()
 
     return map_value, ft_value, st_value
-
+ 
 def compute_ft(query_feats, gallery_feats, query_labels, gallery_labels):
     """
     Compute the feature transferability (FT) score for the given query and gallery features and labels.

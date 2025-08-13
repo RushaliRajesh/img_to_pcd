@@ -15,7 +15,7 @@ from data_debug import ShapeData, pairing
 from loss_util import ContrastiveLoss
 from model import basicmodel
 import pdb
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter 
 
 writer = SummaryWriter('runs/base_method1')
 
