@@ -23,9 +23,32 @@ cd $SLURM_SUBMIT_DIR
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_lim_models.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cor_map_cross.py
-python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_lim_meta.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_lim_meta.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_conti_model.py
 
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cnn.py
+
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_hyp.py
+
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_perci_cross.py
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_attn_samp.py
+
+
+python train_cls.py train \
+	--dataroot /nlsasfs/home/neol/rushar/meshmae/MeshMAE/dataset_hdf5/ \
+	--batch_size 32 --augment_scale --n_classes 40 \
+	--channels 10 --patch_size 64 --n_epoch 100 \
+	--name "manifoldBase_fine_sn" \
+	--weight_decay 0.05 \
+	--lr 1e-4 --optim "adamw" \
+	--depth 12 \
+	--heads 12 \
+	--lr_milestones "none" \
+	--encoder_depth 12 \
+	--decoder_depth 6 \
+	--decoder_dim 512 \
+	--decoder_num_heads 16 \
+	--checkpoint "./checkpoints/shapenet_pretrain.pkl" \
+	--num_warmup_steps "2" \
+	--dim 768

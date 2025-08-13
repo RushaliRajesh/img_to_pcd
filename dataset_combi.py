@@ -242,6 +242,7 @@ def pairing_hdf5(skt_path, model_path, label):
     pcd_hdf5 = pcd_hdf5[pcd_hdf5['split'] == label]
     all_classes = list(set(skt_hdf5['cat']) & set(pcd_hdf5['cat']))
     all_classes = pd.Categorical(all_classes)
+    # pdb.set_trace()
     skt_hdf5['class_id'] = pd.Categorical(skt_hdf5['cat'], categories = all_classes).codes
     pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = all_classes).codes
     pairs = []
@@ -260,7 +261,7 @@ def pairing_hdf5(skt_path, model_path, label):
         pairs.append((i.Index, neg_ind.index[0], sk_cls_id,
                      pcd_cls_id_neg, i.cat, neg_ind['cat'][0], 1))
         
-    return pairs, skt_hdf5, pcd_hdf5
+    return pairs, skt_hdf5, pcd_hdf5, len(all_classes)
 
 
 def all_paths(sketch_path, sketch_dict, shape_path, shape_dict):
@@ -309,6 +310,44 @@ class All_sketches(Dataset):
         return sketch
     
 
+class All_rendered_imgs(Dataset):
+    def __init__(self, all_shape_paths, transform=None):
+        self.all_shape_paths = all_shape_paths
+        self.transform = transform
+        self.base = '/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/rendered_imgs/proj/img_proj/'
+        self.rendered_imgs = {}
+        for shape_path in self.all_shape_paths:
+            mesh_id = shape_path.split("/")[-1].split(".")[0] 
+            if mesh_id not in self.rendered_imgs:
+                self.rendered_imgs[mesh_id] = []
+                for img in os.listdir(os.path.join(self.base, mesh_id)):
+                    # pdb.set_trace()
+                    if img.endswith(".png"):
+                        self.rendered_imgs[mesh_id].append(os.path.join(self.base, mesh_id, img))
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+    
+    def __len__(self):
+        return len(self.all_shape_paths)
+    
+    def __getitem__(self, index):
+        shape_path = self.all_shape_paths[index]
+        model_id = shape_path.split("/")[-1].split(".")[0]
+        all_imgs = []
+        for img in self.rendered_imgs[model_id]:
+            img = self.load_image(img)
+            if self.transform:
+                img = self.transform(img)
+            all_imgs.append(img)
+
+        return torch.stack(all_imgs, dim=0)  
+
+        
+
 class All_shapes(Dataset):
     def __init__(self, all_shape_paths):
         self.all_shape_paths = all_shape_paths
@@ -332,6 +371,91 @@ class All_shapes(Dataset):
             return None
         return torch.tensor(mesh)
         
+
+class ShapeData_meta_h5_render(Dataset):
+    def __init__(self, pairs, transform=None):
+        self.pairs = pairs 
+        self.transform = transform  
+        self.base = "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/rendered_imgs/proj/img_proj/"       
+        self.rendered_imgs = {}
+        for _,model_path, _, _, _, _, _ in self.pairs:
+            mesh_id = model_path.split("/")[-1].split(".")[0] 
+            mesh_img_path = os.path.join(self.base, f"{mesh_id}")
+            if mesh_id not in self.rendered_imgs:
+                self.rendered_imgs[mesh_id] = []
+                for img in os.listdir(mesh_img_path):
+                    if img.endswith(".png"):
+                        self.rendered_imgs[mesh_id].append(os.path.join(mesh_img_path, img))
+
+    def __len__(self):
+        return len(self.pairs)
+    
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_mesh(path):
+        # print(f"Loading from disk: {path}")
+        mesh = np.load(path)
+        return mesh
+
+    def __getitem__(self, index):
+
+        sketch_path, model_path, skt_cls_id, pcd_cls_id, skt_class, pcd_class, pos_neg_ind = self.pairs[index]
+        rendered_imgs = self.rendered_imgs[model_path.split("/")[-1].split(".")[0]]
+
+        if skt_cls_id != pcd_cls_id and pos_neg_ind == 0:
+            print("sketch class id and pcd class id do not match")
+            print("sketch class id: ", skt_cls_id, "pcd class id: ", pcd_cls_id)
+            sys.exit()
+        mesh = self.load_mesh(model_path)
+        if len(mesh) == 0:
+            return None, None, None
+
+        # sketch = Image.open(sketch_path).convert("RGB")
+        # mesh = o3d.io.read_triangle_mesh(model_path)
+        # pdb.set_trace()
+        sketch = self.load_image(sketch_path)
+       
+        mesh_imgs = []
+        # pdb.set_trace()
+        for img in rendered_imgs:
+            mesh_imgs.append(self.load_image(img))
+        
+        # vertices_np = np.asarray(mesh.vertices)
+        # pcd.points = o3d.utility.Vector3dVector(vertices_np)
+
+        # pcd_visu = o3d.geometry.PointCloud()
+        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
+        # # o3d.visualization.draw_plotly([pcd_visu])
+        # o3d.io.write_point_cloud("mesh_ori.ply", pcd_visu)
+
+        #normalise the pcd
+        # mesh = mesh - mesh.mean(axis=0)
+        # mesh = mesh/max(np.linalg.norm(mesh, axis=1).max(), 1e-8)
+
+        # pcd_visu = o3d.geometry.PointCloud()
+        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
+        # # o3d.visualization.draw_plotly([pcd_visu])
+        # o3d.io.write_point_cloud("mesh.ply", pcd_visu)
+        # pdb.set_trace()
+        
+
+        if self.transform:
+            # print("transforming")
+            # print(np.array(sketch).max(), np.array(sketch).min())
+            sketch = self.transform(sketch)
+            mesh_imgs = [self.transform(img) for img in mesh_imgs]
+
+        # return (sketch, torch.tensor(mesh), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
+        return (sketch, torch.stack(mesh_imgs, dim=0), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
+
+
 
 class ShapeData_meta_h5(Dataset):
     def __init__(self, pairs, transform=None):

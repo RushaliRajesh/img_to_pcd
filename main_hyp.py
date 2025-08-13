@@ -35,17 +35,19 @@ import sys
 import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
-from dataset_combi import ShapeData_meta_h5, pairing_hdf5, All_shapes, All_sketches 
+from dataset_combi import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
 from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_metrics
-from model_pt_clip import ModelCombi_cross_perci
+from model_pt_clip import ModelCombi_cross_perci_render_hyp
 import time
 import os
 import pdb
 from torch.utils.tensorboard import SummaryWriter
+import geoopt
 
 
-keyword = "cross_lim_meta_2"
+keyword = "checking_for_meshmae_but_using_main_hyp"
 writer = SummaryWriter(f'runs/{keyword}')
+print("keyword: ", keyword)
 
 B =16     
 
@@ -60,29 +62,53 @@ def visualize_pcd(pcd, name="pcd"):
     plt.savefig('point_cloud_'+name+'.png')
 
 
-tr_pairs, _, _ = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+# tr_pairs, _, _ = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+#                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+#                        label = 'train')
+# te_pairs, te_all_skt, te_all_shp = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+#                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+#                        label = 'test')
+#                    # print("initial tr pairs: ",len(tr_pairs))
+
+
+tr_pairs, _, _, tr_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
                        label = 'train')
-te_pairs, te_all_skt, te_all_shp = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+te_pairs, te_all_skt, te_all_shp, te_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
                        label = 'test')
                    # print("initial tr pairs: ",len(tr_pairs))
 
+print("\n tr_pairs: ", len(tr_pairs))
+print(" te_pairs: ", len(te_pairs))
+print()
+if(tr_classes != te_classes):
+    print("Classes are not same in train and test sets. Exiting...")
+    sys.exit()
+else:
+    classes_total_num = tr_classes
+
+
 all_sketches = All_sketches(te_all_skt.index, transform=transform_img)
-all_shapes = All_shapes(te_all_shp.index)
+all_shapes = All_rendered_imgs(te_all_shp.index, transform=transform_img)
 all_skt_labels = te_all_skt['class_id'].values
 all_shp_labels = te_all_shp['class_id'].values
 
-tr_dataset = ShapeData_meta_h5(
+pdb.set_trace()
+
+tr_dataset = ShapeData_meta_h5_render(
     pairs = tr_pairs,
     transform=transform_img  # You can add image transformations here
 )
-te_dataset = ShapeData_meta_h5(
+
+te_dataset = ShapeData_meta_h5_render(
     pairs = te_pairs,
     transform=transform_img  # You can add image transformations here
 )
 
-# pdb.set_trace()
+# for i in tr_dataset:
+#     pdb.set_trace()
+
 print("tr dataset: ", len(tr_dataset))
 print("te dataset: ", len(te_dataset))
 
@@ -94,16 +120,16 @@ te_data_loader = DataLoader(te_dataset, batch_size=B, shuffle=True, num_workers=
 
 for i in tr_data_loader:
     print("tr_data_loader shape: ") 
-    print(i[0].shape, i[1].shape, i[2].shape)
+    print(i[0].shape, len(i[1]), i[2].shape)
     # visualize_pcd(i[1][0], "original")
     # pdb.set_trace()
     break   
 
-start = time.time()
-for ind, i in enumerate(tr_data_loader):
-    if ind == 100:
-        break
-print(f"DataLoader time per batch: {(time.time() - start) / 100:.4f} seconds")
+# start = time.time()
+# for ind, i in enumerate(tr_data_loader):
+#     if ind == 100:
+#         break
+# print(f"DataLoader time per batch: {(time.time() - start) / 100:.4f} seconds")
 
 print("tr_data_loader: ", len(tr_data_loader))
 print("te_data_loader: ", len(te_data_loader))
@@ -120,20 +146,22 @@ cfg.freeze()
 
 
 # model = ModelCombi_norm_perci(cfg)
-model = ModelCombi_cross_perci(cfg=cfg, bs = B, adapter=False)
+model = ModelCombi_cross_perci_render_hyp(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.to(device)
 print("device: ", device)
-num_epochs = 40
+num_epochs = 60
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER
 # )
 
-opti = torch.optim.Adam(model.parameters(), lr=0.0001)
+# opti = torch.optim.Adam(model.parameters(), lr=0.0001)
+
+opti = geoopt.optim.RiemannianSGD(list(model.parameters()), lr=0.001, momentum=0.9)
 
 # scheduler = make_scheduler(
 #     opti,
@@ -155,12 +183,13 @@ for epoch in tqdm(range(num_epochs)):
     all_pcd_labels = []
     
     for ind,(sketches, pcds, target, pos_neg_ind) in enumerate(tr_data_loader):
-        if ind==3:
-            break
+        # if ind==3:
+        #     break
         sketches = sketches.float().to(device)
         pcds = pcds.float().to(device)
         label = target.long().to(device)
         pos_neg_ind = pos_neg_ind.to(device)
+        # pdb.set_trace()
 
         if pcds == None:
             continue
@@ -210,8 +239,8 @@ for epoch in tqdm(range(num_epochs)):
     model.eval()
     with torch.no_grad():   
         for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader):
-            if ind==3:
-                break
+            # if ind==3:
+            #     break
             sketches = sketches.float().to(device)
             pcds = pcds.float().to(device)
             label = target.long().to(device)
@@ -238,7 +267,7 @@ for epoch in tqdm(range(num_epochs)):
     model.eval()
     with torch.no_grad():
         if epoch % 10 == 0:
- 
+            
             all_img_enc = []
             all_pcd_enc = []
             all_img_labels = []
@@ -257,7 +286,7 @@ for epoch in tqdm(range(num_epochs)):
                 _, _, pc_feat, _ = model(None, pcds)
                 all_pcd_enc.append(pc_feat.cpu().numpy())
                 all_pcd_labels.append(lab)                            
-            pdb.set_trace()
+            # pdb.set_trace()
             all_img_enc = np.concatenate(all_img_enc)
             all_pcd_enc = np.concatenate(all_pcd_enc)
             all_img_labels = np.array(all_img_labels)

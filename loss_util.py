@@ -29,7 +29,7 @@ class ContrastiveLoss(torch.nn.Module):
 
     def forward(self, output1, output2, label):
         euclidean_distance = F.pairwise_distance(output1, output2)
-        pos = (1-label) * torch.pow(euclidean_distance, 2)
+        pos = (1-label) * torch.pow(euclidean_distance, 2) #(0 for pos pos_neg_ind)
         neg = (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
         loss_contrastive = torch.mean( pos + neg )
         return loss_contrastive
@@ -72,7 +72,9 @@ def compute_map(query_feats, gallery_feats, query_labels, gallery_labels):
     return map_value
 
 
-def compute_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
+
+
+def compute_all_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
     """
     Compute mean average precision (mAP) for the given query and gallery features and labels.
     """
@@ -84,6 +86,62 @@ def compute_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
     # Compute cosine similarity
     similarity_matrix = torch.mm(query_feats, gallery_feats.t()) # 4,4
 
+    # Get the indices of the sorted similarities
+    _, sorted_indices = torch.sort(similarity_matrix, dim=1, descending=True) # 4,4
+
+    # Initialize variables to compute mAP
+    num_queries = query_feats.size(0)
+    average_precisions = []
+    ft = []
+    st = []
+    nn = []
+
+    for i in range(num_queries): # 4
+        # pdb.set_trace()
+        query_label = query_labels[i]
+        sorted_gallery_labels = gallery_labels[sorted_indices[i]] #4
+
+        # Compute precision at each rank
+        correct_matches = (sorted_gallery_labels == query_label).float() #4
+        precision_at_k = correct_matches.cumsum(0) / (torch.arange(len(correct_matches)) + 1).float() #4
+
+        # Compute average precision
+        average_precision = (precision_at_k * correct_matches).sum() / correct_matches.sum()
+        average_precisions.append(average_precision.item())
+
+        class_models = torch.where(gallery_labels==query_label)[0].shape[0]
+        # pdb.set_trace()
+        # ft.append((correct_matches.cumsum(0)[len(correct_matches) - 1] / len(correct_matches)).item())
+        # st.append((correct_matches.cumsum(0)[min(2*(len(correct_matches) - 1), len(correct_matches.cumsum(0))-1)] / len(correct_matches)).item())
+        # pdb.set_trace() 
+        ft.append(correct_matches.cumsum(0)[class_models-1].item()/class_models)
+        st.append(correct_matches.cumsum(0)[min(2*(class_models - 1), len(correct_matches.cumsum(0))-1)].item() / (2*class_models))
+        nn.append(correct_matches[0].item())
+
+
+    # Compute mean average precision
+    map_value = sum(average_precisions) / num_queries 
+    ft_value = sum(ft) / num_queries
+    st_value = sum(st) / num_queries
+    nn_value = sum(nn) / num_queries
+    # pdb.set_trace()
+    # nn = 
+ 
+    return map_value, ft_value, st_value, nn_value
+
+
+def compute_metrics(query_feats, gallery_feats, query_labels, gallery_labels):
+    """
+    Compute mean average precision (mAP) for the given query and gallery features and labels.
+    """
+    # Normalize the features
+    query_feats = F.normalize(query_feats, dim=1) # 4, 768
+    gallery_feats = F.normalize(gallery_feats, dim=1) # 4, 768
+    # pdb.set_trace()
+
+    # Compute cosine similarity
+    similarity_matrix = torch.mm(query_feats, gallery_feats.t()) # 4,4
+    # pdb.set_trace()
     # Get the indices of the sorted similarities
     _, sorted_indices = torch.sort(similarity_matrix, dim=1, descending=True) # 4,4
 

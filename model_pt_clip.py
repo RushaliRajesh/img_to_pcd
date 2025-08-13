@@ -41,6 +41,8 @@ warnings.filterwarnings("ignore")
 import torch
 import torch.nn.functional as F
 from torch import nn
+import geoopt
+from mobius_linear_example import MobiusLinear
 
 class ModelCombi(nn.Module):
     def __init__(self, cfg=None):
@@ -179,6 +181,148 @@ class CrossAttentionLayer(nn.Module):
         output = torch.matmul(attention_weights, values)
 
         return attention_weights, output       
+
+def hyperbolic_ReLU(hyperbolic_input, manifold):
+    euclidean_input = manifold.logmap0(hyperbolic_input)
+    euclidean_output = F.relu(euclidean_input)
+    hyperbolic_output = manifold.expmap0(euclidean_output)
+    return hyperbolic_output
+class HyperbolicNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = MobiusLinear(28 * 28, 750)
+        self.fc11 = MobiusLinear(750, 20)
+        self.fc2 = MobiusLinear(20, 10)
+
+    def forward(self, x, manifold):
+        out_x = self.fc1(x)
+        out_x = hyperbolic_ReLU(out_x, manifold)
+        out_x = self.fc11(out_x)
+        out_x = hyperbolic_ReLU(out_x, manifold)
+        out_x = self.fc2(out_x)
+        return out_x
+
+class ModelCombi_cross_perci_render_hyp(nn.Module):
+    def __init__(self, bs, cfg=None, adapter = False, classes_total=48):
+        super(ModelCombi_cross_perci_render_hyp, self).__init__()
+
+        if adapter:
+            self.adapter_skt = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+            self.adapter_pcd = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+        self.vpt_2d, self.model = build_model(cfg)
+        self.pcviews = ut.PCViews()
+        #10 views, thats why 10,768
+        self.query =  torch.nn.Parameter(torch.ones(10, 128), requires_grad=True)
+        self.attn = CrossAttentionLayer(128, 768)
+        self.intermediate = torch.nn.Linear(128, 768)
+        self.res = torch.nn.Linear(768, classes_total)
+        # pdb.set_trace()
+
+        self.fc1_hyp = MobiusLinear(128, 768)
+        self.fc1_hyp_im = MobiusLinear(768, 128) #for images
+        self.fc1_hyp_pc = MobiusLinear(128, 128) #for pcd
+        self.fc2_hyp = MobiusLinear(128, classes_total)
+        self.manifold = geoopt.PoincareBall()
+
+    def forward(self, img, render_imgs):
+        img_feat, img_output, ptcloud_feat, ptcloud_output_final = None, None, None, None
+        if img is not None:
+            if hasattr(self, 'adapter_skt'):
+                img = self.adapter_skt(img)
+            img_feat, img_output = self.vpt_2d(img)
+            img_feat = self.manifold.expmap0(img_feat)
+            img_feat = self.fc1_hyp_im(img_feat)
+            img_output = self.fc2_hyp(img_feat)
+            # out_x = hyperbolic_ReLU(out_x, self.manifold)
+            # pdb.set_trace()
+        if render_imgs is not None:
+            # pcds_img = self.pcviews.get_img(ptcloud)
+            # pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
+            # pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
+            # pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            bs = render_imgs.shape[0]
+            render_imgs = render_imgs.reshape(-1, 3, 224, 224)
+            if hasattr(self, 'adapter_pcd'):
+                render_imgs = self.adapter_pcd(render_imgs)
+            # pdb.set_trace()
+            ptcloud_feat, ptcloud_output = self.vpt_2d(render_imgs)
+            ptcloud_feat = ptcloud_feat.reshape(bs, -1, ptcloud_feat.shape[1])
+            attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
+            ptcloud_feat = ptcloud_feat.mean(dim=1)
+            # ptcloud_feat = self.intermediate(ptcloud_feat)
+            # ptcloud_output_final = self.res(ptcloud_feat)
+            # pdb.set_trace()
+            ptcloud_feat = self.manifold.expmap0(ptcloud_feat)
+            ptcloud_feat = self.fc1_hyp_pc(ptcloud_feat)
+            ptcloud_output_final = self.fc2_hyp(ptcloud_feat)
+            # out_x = hyperbolic_ReLU(out_x, self.manifold)
+
+        return img_feat, img_output, ptcloud_feat, ptcloud_output_final
+
+
+
+class ModelCombi_cross_perci_render(nn.Module):
+    def __init__(self, bs, cfg=None, adapter = False, classes_total=48):
+        super(ModelCombi_cross_perci_render, self).__init__()
+
+        if adapter:
+            self.adapter_skt = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+            self.adapter_pcd = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+        self.vpt_2d, self.model = build_model(cfg)
+        self.pcviews = ut.PCViews()
+        #10 views, thats why 10,768
+        self.query =  torch.nn.Parameter(torch.ones(10, 128), requires_grad=True)
+        self.attn = CrossAttentionLayer(128, 768)
+        self.intermediate = torch.nn.Linear(128, 768)
+        self.res = torch.nn.Linear(768, classes_total)
+        # pdb.set_trace()
+
+    def forward(self, img, render_imgs):
+        img_feat, img_output, ptcloud_feat, ptcloud_output_final = None, None, None, None
+        if img is not None:
+            if hasattr(self, 'adapter_skt'):
+                img = self.adapter_skt(img)
+            img_feat, img_output = self.vpt_2d(img)
+        if render_imgs is not None:
+            # pcds_img = self.pcviews.get_img(ptcloud)
+            # pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
+            # pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
+            # pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            bs = render_imgs.shape[0]
+            render_imgs = render_imgs.reshape(-1, 3, 224, 224)
+            if hasattr(self, 'adapter_pcd'):
+                render_imgs = self.adapter_pcd(render_imgs)
+            # pdb.set_trace()
+            ptcloud_feat, ptcloud_output = self.vpt_2d(render_imgs)
+            ptcloud_feat = ptcloud_feat.reshape(bs, -1, ptcloud_feat.shape[1])
+            attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
+            pdb.set_trace()
+            ptcloud_feat = ptcloud_feat.mean(dim=1)
+            ptcloud_feat = self.intermediate(ptcloud_feat)
+            ptcloud_output_final = self.res(ptcloud_feat)
+
+        return img_feat, img_output, ptcloud_feat, ptcloud_output_final
+
 
 
 class ModelCombi_cross_perci(nn.Module):
@@ -345,9 +489,12 @@ if __name__ == "__main__":
     cfg.freeze()
     # model = ModelCombi_norm_perci(cfg)
     # model = ModelCombi_norm_perci(cfg, adapter=True)
-    model = ModelCombi_cross_perci(5, cfg, adapter=False)
+    # model = ModelCombi_cross_perci(5, cfg, adapter=False)
+    model = ModelCombi_cross_perci_render_hyp(5, cfg, adapter=False)
     model = model.cuda()
     # x1, x2 = model(torch.randn(5, 3, 224, 224), torch.randn(5, 3, 500))\
     # x1, x2, x3, x4 = model(torch.randn(5, 3, 224, 224).cuda(), torch.randn(5, 500, 3).cuda())
-    x1,_,_,_ = model(torch.randn(5, 3, 224, 224).cuda(), None)
+    x1, x2, x3, x4 = model(torch.randn(5, 3, 224, 224).cuda(), torch.randn(5,5, 3, 224, 224).cuda())
+    # x1, x2, x3, x4 = model(torch.randn(5, 3, 224, 224), torch.randn(5, 500, 3))
+    # x1,_,_,_ = model(torch.randn(5, 3, 224, 224).cuda(), None)
     print("done")
