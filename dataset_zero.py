@@ -16,7 +16,6 @@ from natsort import natsorted
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 import pandas as pd
-from pytorch3d.io import IO
 
 def read_classification_file(filename, flag, class_path):
     # print("in here")
@@ -235,64 +234,42 @@ def lim_pairing(sketch_models, models_3d):
     return pairs 
 
 
-def pairing_hdf5(skt_path, model_path, label):
+def pairing_hdf5(skt_path, model_path, label, all_classes, zs_classes):
     
     skt_hdf5 = pd.read_hdf(skt_path, key='sk')
     skt_hdf5 = skt_hdf5[skt_hdf5['split'] == label]
     pcd_hdf5 = pd.read_hdf(model_path, key='pcd')
     pcd_hdf5 = pcd_hdf5[pcd_hdf5['split'] == label]
-    all_classes = list(sorted(set(skt_hdf5['cat']) & set(pcd_hdf5['cat'])))
-    all_classes = pd.Categorical(all_classes)
+    # all_classes = list(sorted(set(skt_hdf5['cat']) & set(pcd_hdf5['cat'])))
+    # all_classes = pd.Categorical(all_classes)
     # pdb.set_trace()
     skt_hdf5['class_id'] = pd.Categorical(skt_hdf5['cat'], categories = all_classes).codes
     pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = all_classes).codes
-    pairs = []
     
-    for i in skt_hdf5.itertuples():
+    skt_fs = skt_hdf5[~skt_hdf5['class_id'].isin(zs_classes)]
+    skt_zs = skt_hdf5[skt_hdf5['class_id'].isin(zs_classes)]
+    pcd_fs = pcd_hdf5[~pcd_hdf5['class_id'].isin(zs_classes)]
+    pcd_zs = pcd_hdf5[pcd_hdf5['class_id'].isin(zs_classes)]
+    pairs = []
+
+    pdb.set_trace()
+    
+    for i in skt_fs.itertuples():
         sk_cls = i.cat
         sk_cls_id = pd.Categorical([sk_cls], categories = all_classes).codes[0]
         #randomly choose a model from the same class
-        pos_ind = pcd_hdf5[pcd_hdf5['cat'] == sk_cls].sample(1)
-        neg_ind = pcd_hdf5[pcd_hdf5['cat'] != sk_cls].sample(1)
+        pos_ind = pcd_fs[pcd_fs['cat'] == sk_cls].sample(1)
+        neg_ind = pcd_fs[pcd_fs['cat'] != sk_cls].sample(1)
         pcd_cls_id_pos = pd.Categorical([pos_ind['cat'].values[0]], categories = all_classes).codes[0]
         pcd_cls_id_neg = pd.Categorical([neg_ind['cat'].values[0]], categories = all_classes).codes[0]
         # pdb.set_trace()
-        pairs.append((i.Index, pos_ind.index[0], sk_cls_id, 
-                     pcd_cls_id_pos, i.cat, pos_ind['cat'][0], 0))  # 0 for positive pair
-        pairs.append((i.Index, neg_ind.index[0], sk_cls_id,
+        if sk_cls_id not in zs_classes:
+            pairs.append((i.Index, pos_ind.index[0], sk_cls_id, 
+                        pcd_cls_id_pos, i.cat, pos_ind['cat'][0], 0))  # 0 for positive pair
+            pairs.append((i.Index, neg_ind.index[0], sk_cls_id,
                      pcd_cls_id_neg, i.cat, neg_ind['cat'][0], 1))
         
-    return pairs, skt_hdf5, pcd_hdf5, len(all_classes)
-
-def pairing_hdf5_meshes(skt_path, model_path, label):
-    
-    skt_hdf5 = pd.read_hdf(skt_path, key='sk')
-    skt_hdf5 = skt_hdf5[skt_hdf5['split'] == label]
-    pcd_hdf5 = pd.read_hdf(model_path, key='cad')
-    pcd_hdf5 = pcd_hdf5[pcd_hdf5['split'] == label]
-    all_classes = list(sorted(set(skt_hdf5['cat']) & set(pcd_hdf5['cat'])))
-    all_classes = pd.Categorical(all_classes)
-    # pdb.set_trace()
-    skt_hdf5['class_id'] = pd.Categorical(skt_hdf5['cat'], categories = all_classes).codes
-    pcd_hdf5['class_id'] = pd.Categorical(pcd_hdf5['cat'], categories = all_classes).codes
-    pairs = []
-    
-    for i in skt_hdf5.itertuples():
-        sk_cls = i.cat
-        sk_cls_id = pd.Categorical([sk_cls], categories = all_classes).codes[0]
-        #randomly choose a model from the same class
-        pos_ind = pcd_hdf5[pcd_hdf5['cat'] == sk_cls].sample(1)
-        neg_ind = pcd_hdf5[pcd_hdf5['cat'] != sk_cls].sample(1)
-        pcd_cls_id_pos = pd.Categorical([pos_ind['cat'].values[0]], categories = all_classes).codes[0]
-        pcd_cls_id_neg = pd.Categorical([neg_ind['cat'].values[0]], categories = all_classes).codes[0]
-        # pdb.set_trace()
-        pairs.append((i.Index, pos_ind.index[0], sk_cls_id, 
-                     pcd_cls_id_pos, i.cat, pos_ind['cat'][0], 0))  # 0 for positive pair
-        pairs.append((i.Index, neg_ind.index[0], sk_cls_id,
-                     pcd_cls_id_neg, i.cat, neg_ind['cat'][0], 1))
-        
-    return pairs, skt_hdf5, pcd_hdf5, len(all_classes)
-
+    return pairs, skt_hdf5, pcd_hdf5, len(all_classes), skt_fs, skt_zs, pcd_fs, pcd_zs
 
 
 def all_paths(sketch_path, sketch_dict, shape_path, shape_dict):
@@ -339,30 +316,7 @@ class All_sketches(Dataset):
             # print(np.array(sketch).max(), np.array(sketch).min())
             sketch = self.transform(sketch)
         return sketch
-
-
-class All_meshes(Dataset):
-    def __init__(self, all_shape_paths):
-        self.all_shape_paths = all_shape_paths
-        self.shapes = []
-
-    @staticmethod
-    @lru_cache(maxsize=100)  
-    def load_mesh(path):
-        # print(f"Loading from disk: {path}")
-        mesh = IO().load_mesh(path)
-        return mesh
     
-    def __len__(self):
-        return len(self.all_shape_paths)
-    
-    def __getitem__(self, index):
-        shape_path = self.all_shape_paths[index]
-        # print("shape_path: ", shape_path)
-        mesh = self.load_mesh(shape_path)
-        if len(mesh) == 0:
-            return None
-        return mesh
 
 class All_rendered_imgs(Dataset):
     def __init__(self, all_shape_paths, transform=None):
@@ -507,52 +461,7 @@ class ShapeData_meta_h5_render(Dataset):
             mesh_imgs = [self.transform(img) for img in mesh_imgs]
 
         # return (sketch, torch.tensor(mesh), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
-        pdb.set_trace()
         return (sketch, torch.stack(mesh_imgs, dim=0), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
-
-
-class ShapeData_meta_h5_render_diff_ren(Dataset):
-    def __init__(self, pairs, transform=None):
-        self.pairs = pairs 
-        self.transform = transform  
-        
-    def __len__(self):
-        return len(self.pairs)
-    
-    @staticmethod
-    @lru_cache(maxsize=100)  
-    def load_image(path):
-        # print(f"Loading from disk: {path}")
-        img = Image.open(path).convert("RGB")
-        return img
-
-    @staticmethod
-    @lru_cache(maxsize=100)  
-    def load_mesh(path):
-        # print(f"Loading from disk: {path}")
-        mesh = IO().load_mesh(path)
-        return mesh
-
-    def __getitem__(self, index):
-
-        sketch_path, model_path, skt_cls_id, pcd_cls_id, skt_class, pcd_class, pos_neg_ind = self.pairs[index]
-        
-        if skt_cls_id != pcd_cls_id and pos_neg_ind == 0:
-            print("sketch class id and pcd class id do not match")
-            print("sketch class id: ", skt_cls_id, "pcd class id: ", pcd_cls_id)
-            sys.exit()
-        mesh = self.load_mesh(model_path)
-        if len(mesh) == 0:
-            return None, None, None
-
-        sketch = self.load_image(sketch_path)
-
-        if self.transform:
-            sketch = self.transform(sketch)
-
-        # pdb.set_trace()
-        # print("diff rend")
-        return {'sketch': sketch, "meshes":mesh, "skt_class":torch.tensor(skt_cls_id), "pos_neg":torch.tensor(pos_neg_ind)}
 
 
 
@@ -619,72 +528,6 @@ class ShapeData_meta_h5(Dataset):
 
         return (sketch, torch.tensor(mesh), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
 
-
-class ShapeData(Dataset):
-    def __init__(self, sketch_dir, model_dir, sketch_file, model_file, pairs, label = "train",transform=None):
-        self.sketch_dir = sketch_dir
-        self.model_dir = model_dir
-        self.transform = transform
-        self.sketch_models, self.sketch_N = sketch_file
-        self.models_3d, self.N_3d = model_file
-        self.label = label
-        self.pairs = pairs                 
-
-    def __len__(self):
-        return len(self.pairs)
-    
-    @staticmethod
-    @lru_cache(maxsize=100)  
-    def load_image(path):
-        # print(f"Loading from disk: {path}")
-        img = Image.open(path).convert("RGB")
-        return img
-
-    @staticmethod
-    @lru_cache(maxsize=100)  
-    def load_mesh(path):
-        # print(f"Loading from disk: {path}")
-        mesh = np.load(path)
-        return mesh
-
-    def __getitem__(self, index):
-
-        sketch_id, model_id, class_name, target, pos_neg_ind = self.pairs[index]
-        # print("skt_id: ", sketch_id, "model_id: ", model_id, "class_name: ", class_name, "target: ", target)
-        sketch_path = os.path.join(self.sketch_dir, f"{class_name}/{self.label}/{sketch_id}.png")
-        model_path = os.path.join(self.model_dir, f"M{model_id}.npy")
-
-        # sketch = Image.open(sketch_path).convert("RGB")
-        # mesh = o3d.io.read_triangle_mesh(model_path)
-        sketch = self.load_image(sketch_path)
-        mesh = self.load_mesh(model_path)
-        if len(mesh) == 0:
-            return None, None, None
-        # vertices_np = np.asarray(mesh.vertices)
-        # pcd.points = o3d.utility.Vector3dVector(vertices_np)
-
-        # pcd_visu = o3d.geometry.PointCloud()
-        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
-        # # o3d.visualization.draw_plotly([pcd_visu])
-        # o3d.io.write_point_cloud("mesh_ori.ply", pcd_visu)
-
-        #normalise the pcd
-        mesh = mesh - mesh.mean(axis=0)
-        mesh = mesh/max(np.linalg.norm(mesh, axis=1).max(), 1e-8)
-
-        # pcd_visu = o3d.geometry.PointCloud()
-        # pcd_visu.points = o3d.utility.Vector3dVector(mesh)
-        # # o3d.visualization.draw_plotly([pcd_visu])
-        # o3d.io.write_point_cloud("mesh.ply", pcd_visu)
-        # pdb.set_trace()
-        
-
-        if self.transform:
-            # print("transforming")
-            # print(np.array(sketch).max(), np.array(sketch).min())
-            sketch = self.transform(sketch)
-
-        return (sketch, torch.tensor(mesh), torch.tensor(target), torch.tensor(pos_neg_ind))
 
     
 

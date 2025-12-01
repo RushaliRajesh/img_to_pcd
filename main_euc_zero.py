@@ -35,17 +35,17 @@ import sys
 import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
-from dataset_combi import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
-from loss_util import ContrastiveLoss_hyp, Cross_entropy, compute_map, compute_metrics_hyp
-from model_pt_clip import ModelCombi_cross_perci_render_hyp_learnable
+from dataset_zero import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
+from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_all_metrics
+from model_pt_clip import ModelCombi_cross_perci_render
 import time
 import os
 import pdb
+import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
-import geoopt
 
 
-keyword = "main_hyp_rendering_chk"
+keyword = "cross_eucli_zero_shot"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -61,6 +61,11 @@ def visualize_pcd(pcd, name="pcd"):
     plt.scatter(pcd[:, 0], pcd[:, 1], c=pcd[:, 2], s=1)
     plt.savefig('point_cloud_'+name+'.png')
 
+def get_all_classes(skt_path, model_path):
+    skt_hdf5 = pd.read_hdf(skt_path, key='sk')
+    pcd_hdf5 = pd.read_hdf(model_path, key='pcd')
+    all_classes = sorted(set(skt_hdf5['cat']) & set(pcd_hdf5['cat']))
+    return all_classes
 
 # tr_pairs, _, _ = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
 #                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
@@ -69,32 +74,53 @@ def visualize_pcd(pcd, name="pcd"):
 #                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
 #                        label = 'test')
 #                    # print("initial tr pairs: ",len(tr_pairs))
+np.random.seed(42)
+tot_cls = 48
+zs_classes = np.random.choice(tot_cls, size=int(0.1*tot_cls), replace=False)
 
+all_classes = get_all_classes("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+                       "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5")
+# pdb.set_trace()
+if (len(all_classes) != tot_cls):
+    print("Total classes not matching with numpy file. Exiting...")
+    sys.exit()
 
-tr_pairs, _, _, tr_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+tr_pairs, _, _, tr_classes, tr_skt_fs, tr_skt_zs, tr_shp_fs, tr_shp_zs = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
-                       label = 'train')
-te_pairs, te_all_skt, te_all_shp, te_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+                       label = 'train', all_classes = all_classes, zs_classes = zs_classes)
+te_pairs, te_all_skt, te_all_shp, te_classes, te_skt_fs, te_skt_zs, te_shp_fs, te_shp_zs = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
                        "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
-                       label = 'test')
+                       label = 'test', all_classes = all_classes, zs_classes = zs_classes)
                    # print("initial tr pairs: ",len(tr_pairs))
+
+te_skt_fs = pd.concat([te_skt_fs, tr_skt_fs])
+te_skt_zs = pd.concat([te_skt_zs, tr_skt_zs])
+te_shp_fs = pd.concat([te_shp_fs, tr_shp_fs])
+te_shp_zs = pd.concat([te_shp_zs, tr_shp_zs])
 
 print("\n tr_pairs: ", len(tr_pairs))
 print(" te_pairs: ", len(te_pairs))
 print()
-if(tr_classes != te_classes):
+if tot_cls != tr_classes:
+    print("Total classes and train classes are not same. Exiting...")
+    sys.exit()
+elif(tr_classes != te_classes):
     print("Classes are not same in train and test sets. Exiting...")
     sys.exit()
 else:
     classes_total_num = tr_classes
 
-
-all_sketches = All_sketches(te_all_skt.index, transform=transform_img)
-all_shapes = All_rendered_imgs(te_all_shp.index, transform=transform_img)
-all_skt_labels = te_all_skt['class_id'].values
-all_shp_labels = te_all_shp['class_id'].values
-
 # pdb.set_trace()
+
+all_sketches_fs = All_sketches(te_skt_fs.index, transform=transform_img)
+all_shapes_fs = All_rendered_imgs(te_shp_fs.index, transform=transform_img)
+all_skt_labels_fs = te_skt_fs['class_id'].values
+all_shp_labels_fs = te_shp_fs['class_id'].values
+
+all_sketches_zs = All_sketches(te_skt_zs.index, transform=transform_img)
+all_shapes_zs = All_rendered_imgs(te_shp_zs.index, transform=transform_img)
+all_skt_labels_zs = te_skt_zs['class_id'].values
+all_shp_labels_zs = te_shp_zs['class_id'].values
 
 tr_dataset = ShapeData_meta_h5_render(
     pairs = tr_pairs,
@@ -146,29 +172,25 @@ cfg.freeze()
 
 
 # model = ModelCombi_norm_perci(cfg)
-model = ModelCombi_cross_perci_render_hyp_learnable(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
+model = ModelCombi_cross_perci_render(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
-
+ce_loss = Cross_entropy()
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.to(device)
 print("device: ", device)
-num_epochs = 60
+num_epochs = 101
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER
 # )
 
-# opti = torch.optim.Adam(model.parameters(), lr=0.0001)
-
-# opti = geoopt.optim.RiemannianSGD(list(model.parameters()), lr=0.001, momentum=0.9)
-opti = geoopt.optim.RiemannianAdam(list(model.parameters()), lr=0.0001)
+opti = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 # scheduler = make_scheduler(
 #     opti,
 #     cfg.SOLVER)
-con_loss = ContrastiveLoss_hyp()
-ce_loss = Cross_entropy()
+con_loss = ContrastiveLoss()
 
 for epoch in tqdm(range(num_epochs)):
     model.train()
@@ -203,7 +225,7 @@ for epoch in tqdm(range(num_epochs)):
                 
         loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
         loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
-        loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind, model.manifold)
+        loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind)
         loss = loss1+loss2+loss3
         acc = (acc1 + acc2) / 2
         # pdb.set_trace()
@@ -255,7 +277,7 @@ for epoch in tqdm(range(num_epochs)):
                     
             loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
             loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
-            loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind, model.manifold)
+            loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind)
             loss = loss1+loss2+loss3
             acc = (acc1 + acc2) / 2
             val_loss += loss.item()
@@ -274,14 +296,14 @@ for epoch in tqdm(range(num_epochs)):
             all_pcd_enc = []
             all_img_labels = []
             all_pcd_labels = []
-            for skts, lab in zip(all_sketches, all_skt_labels):
+            for skts, lab in zip(all_sketches_fs, all_skt_labels_fs):
                 skts = skts.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
                 sk_feat, _,_,_= model(skts, None)
                 all_img_enc.append(sk_feat.cpu().numpy())
                 all_img_labels.append(lab)
             # pdb.set_trace()
-            for pcd, lab in zip(all_shapes, all_shp_labels):
+            for pcd, lab in zip(all_shapes_fs, all_shp_labels_fs):
                 pcds = pcd.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
                 # pdb.set_trace()
@@ -297,9 +319,47 @@ for epoch in tqdm(range(num_epochs)):
 
             # Compute mAP
             # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
-            mAP, ft, st, nn = compute_metrics_hyp(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
-                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels), model.manifold)
+            mAP, ft, st, nn = compute_all_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
+                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
             print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}, nn: {nn:.4f}", flush = True)
+            writer.add_scalar('mAP', mAP, epoch)
+            writer.add_scalar('ft', ft, epoch)
+            writer.add_scalar('st', st, epoch)
+
+    model.eval()
+    with torch.no_grad():
+        if epoch % 10 == 0:
+            
+            all_img_enc = []
+            all_pcd_enc = []
+            all_img_labels = []
+            all_pcd_labels = []
+            for skts, lab in zip(all_sketches_zs, all_skt_labels_zs):
+                skts = skts.float().to(device).unsqueeze(0)
+                # lab = lab.reshape(1,1)
+                sk_feat, _,_,_= model(skts, None)
+                all_img_enc.append(sk_feat.cpu().numpy())
+                all_img_labels.append(lab)
+            # pdb.set_trace()
+            for pcd, lab in zip(all_shapes_zs, all_shp_labels_zs):
+                pcds = pcd.float().to(device).unsqueeze(0)
+                # lab = lab.reshape(1,1)
+                # pdb.set_trace()
+                _, _, pc_feat, _ = model(None, pcds)
+                all_pcd_enc.append(pc_feat.cpu().numpy())
+                all_pcd_labels.append(lab)                            
+            # pdb.set_trace()
+            all_img_enc = np.concatenate(all_img_enc)
+            all_pcd_enc = np.concatenate(all_pcd_enc)
+            all_img_labels = np.array(all_img_labels)
+            all_pcd_labels = np.array(all_pcd_labels)
+
+
+            # Compute mAP
+            # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
+            mAP, ft, st, nn = compute_all_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
+                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
+            print(f"Epoch [{epoch+1}/{num_epochs}], zeroshot results: mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}, nn: {nn:.4f}", flush = True)
             writer.add_scalar('mAP', mAP, epoch)
             writer.add_scalar('ft', ft, epoch)
             writer.add_scalar('st', st, epoch)

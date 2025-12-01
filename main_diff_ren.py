@@ -5,6 +5,7 @@ import yaml
 from fvcore.common.config import CfgNode as _CfgNode
 from tqdm import tqdm
 from torchvision.transforms import ToPILImage
+from pytorch3d.datasets.utils import collate_batched_meshes
 
 # Add the project root directory to the Python path
 # This allows absolute imports like 'vpt_workspace...' to work
@@ -35,17 +36,18 @@ import sys
 import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
-from dataset_combi import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
+from dataset_combi import ShapeData_meta_h5_render_diff_ren, pairing_hdf5_meshes, All_meshes, All_sketches 
 from loss_util import ContrastiveLoss_hyp, Cross_entropy, compute_map, compute_metrics_hyp
-from model_pt_clip import ModelCombi_cross_perci_render_hyp_learnable
+from renderer_py3d import Model_hyp_diff_ren
 import time
 import os
 import pdb
 from torch.utils.tensorboard import SummaryWriter
 import geoopt
+from pytorch3d.structures import join_meshes_as_batch
 
 
-keyword = "main_hyp_rendering_chk"
+keyword = "main_hyp_rendering_1_chn_sil2"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -71,11 +73,13 @@ def visualize_pcd(pcd, name="pcd"):
 #                    # print("initial tr pairs: ",len(tr_pairs))
 
 
-tr_pairs, _, _, tr_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
-                       "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+tr_pairs, _, _, tr_classes = pairing_hdf5_meshes("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+                    #    "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+                       "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/cad_orig.hdf5",
                        label = 'train')
-te_pairs, te_all_skt, te_all_shp, te_classes = pairing_hdf5("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
-                       "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+te_pairs, te_all_skt, te_all_shp, te_classes = pairing_hdf5_meshes("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/sk_orig.hdf5",
+                    #    "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/pcds_orig.hdf5",
+                       "/nlsasfs/home/neol/rushar/scripts/img_to_pcd/shrec_data/splits/cad_orig.hdf5",
                        label = 'test')
                    # print("initial tr pairs: ",len(tr_pairs))
 
@@ -90,18 +94,18 @@ else:
 
 
 all_sketches = All_sketches(te_all_skt.index, transform=transform_img)
-all_shapes = All_rendered_imgs(te_all_shp.index, transform=transform_img)
+all_shapes = All_meshes(te_all_shp.index)
 all_skt_labels = te_all_skt['class_id'].values
 all_shp_labels = te_all_shp['class_id'].values
 
 # pdb.set_trace()
 
-tr_dataset = ShapeData_meta_h5_render(
+tr_dataset = ShapeData_meta_h5_render_diff_ren(
     pairs = tr_pairs,
     transform=transform_img  # You can add image transformations here
 )
 
-te_dataset = ShapeData_meta_h5_render(
+te_dataset = ShapeData_meta_h5_render_diff_ren(
     pairs = te_pairs,
     transform=transform_img  # You can add image transformations here
 )
@@ -112,11 +116,44 @@ te_dataset = ShapeData_meta_h5_render(
 print("tr dataset: ", len(tr_dataset))
 print("te dataset: ", len(te_dataset))
 
-tr_data_loader = DataLoader(tr_dataset, batch_size=B, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
-te_data_loader = DataLoader(te_dataset, batch_size=B, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
+# def my_collate_fn(batch):
+
+#     batch = [b for b in batch if b is not None]
+
+#     sketches = torch.stack([b["sketch"] for b in batch])
+#     labels = torch.tensor([b["skt_class"] for b in batch])
+#     posneg = torch.tensor([b["pos_neg"] for b in batch])
+
+#     mesh_list = [{"meshes": b["meshes"]} for b in batch]
+#     meshes = collate_batched_meshes(mesh_list)
+#     print(type(batch[0]["meshes"]))
+
+#     return sketches, meshes, labels, posneg
+
+def my_collate_fn(batch):
+    batch = [b for b in batch if b is not None]
+
+    sketches = torch.stack([b["sketch"] for b in batch])
+    labels   = torch.tensor([b["skt_class"] for b in batch])
+    posneg   = torch.tensor([b["pos_neg"] for b in batch])
+
+    # Collect mesh objects directly
+    mesh_list = [b["meshes"] for b in batch]
+
+    # Batch them
+    meshes = join_meshes_as_batch(mesh_list)
+
+    return sketches, meshes, labels, posneg
+
+tr_data_loader = DataLoader(tr_dataset, collate_fn=my_collate_fn, batch_size=B, shuffle=True, num_workers=0, pin_memory=True, drop_last=True)
+te_data_loader = DataLoader(te_dataset, batch_size=B, shuffle=True, num_workers=0, pin_memory=True, drop_last=True, collate_fn=my_collate_fn)
 # tr_model_loader = DataLoader(tr_3d_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
 # te_model_loader = DataLoader(te_3d_dataset, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
-  
+
+it = iter(tr_data_loader)
+nx = next(it)
+# for i in tr_data_loader:
+
 
 for i in tr_data_loader:
     print("tr_data_loader shape: ") 
@@ -133,6 +170,7 @@ for i in tr_data_loader:
 
 print("tr_data_loader: ", len(tr_data_loader))
 print("te_data_loader: ", len(te_data_loader))
+print("data ok")
 # pdb.set_trace()
 
 #load config_params.yaml
@@ -146,14 +184,15 @@ cfg.freeze()
 
 
 # model = ModelCombi_norm_perci(cfg)
-model = ModelCombi_cross_perci_render_hyp_learnable(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+model = Model_hyp_diff_ren(cfg=cfg, bs = B, adapter=False, device = device, classes_total=classes_total_num)
+
 model = model.to(device)
 print("device: ", device)
-num_epochs = 60
+num_epochs = 61
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER
@@ -188,7 +227,7 @@ for epoch in tqdm(range(num_epochs)):
         # if ind==3:
         #     break
         sketches = sketches.float().to(device)
-        pcds = pcds.float().to(device)
+        pcds = pcds.to(device)
         label = target.long().to(device)
         pos_neg_ind = pos_neg_ind.to(device)
         # pdb.set_trace()
@@ -240,11 +279,11 @@ for epoch in tqdm(range(num_epochs)):
 
     model.eval()
     with torch.no_grad():   
-        for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader):
+        for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader): 
             # if ind==3:
             #     break
             sketches = sketches.float().to(device)
-            pcds = pcds.float().to(device)
+            pcds = pcds.to(device)
             label = target.long().to(device)
             pos_neg_ind = pos_neg_ind.to(device)
 
@@ -282,7 +321,8 @@ for epoch in tqdm(range(num_epochs)):
                 all_img_labels.append(lab)
             # pdb.set_trace()
             for pcd, lab in zip(all_shapes, all_shp_labels):
-                pcds = pcd.float().to(device).unsqueeze(0)
+                # pcds = pcd.to(device).unsqueeze(0)
+                pcds = join_meshes_as_batch([pcd]).to(device)
                 # lab = lab.reshape(1,1)
                 # pdb.set_trace()
                 _, _, pc_feat, _ = model(None, pcds)

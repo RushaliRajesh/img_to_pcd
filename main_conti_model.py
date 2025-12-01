@@ -36,16 +36,15 @@ import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
 from dataset_combi import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
-from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_metrics, compute_all_metrics
-from model_pt_clip import ModelCombi_cross_perci_render_hyp
+from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_all_metrics
+from model_pt_clip import ModelCombi_cross_perci_render
 import time
 import os
 import pdb
 from torch.utils.tensorboard import SummaryWriter
-import geoopt
 
 
-keyword = "cross_lim_meta_render_hyperspace_conti_crt_eval"
+keyword = "cross_lim_meta_render_cor_classes_48_model_conti"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -144,23 +143,21 @@ cfg.freeze()
 
 
 # model = ModelCombi_norm_perci(cfg)
-model = ModelCombi_cross_perci_render_hyp(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
-model.load_state_dict(torch.load('/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_lim_meta_render_hyperspace_conti/model.pt'))
+model = ModelCombi_cross_perci_render(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
+model.load_state_dict(torch.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_lim_meta_render_cor_classes_48/model.pt"))
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 model = model.to(device)
 print("device: ", device)
-num_epochs = 60
+num_epochs = 101
 # opti = make_optimizer(
 #     [model],
 #     cfg.SOLVER
 # )
 
-# opti = torch.optim.Adam(model.parameters(), lr=0.0001)
-
-opti = geoopt.optim.RiemannianSGD(list(model.parameters()), lr=0.001, momentum=0.9)
+opti = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 # scheduler = make_scheduler(
 #     opti,
@@ -296,11 +293,10 @@ for epoch in tqdm(range(num_epochs)):
             # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
             mAP, ft, st, nn = compute_all_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
                                 torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
-            print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}, nn: {nn:.4f}", flush = True)
+            print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}", flush = True)
             writer.add_scalar('mAP', mAP, epoch)
             writer.add_scalar('ft', ft, epoch)
             writer.add_scalar('st', st, epoch)
-            writer.add_scalar('nn', nn, epoch)
 
     print(f"Epoch [{epoch+1}/{num_epochs}], Train Loss: {tr_loss/len(tr_data_loader):.4f}, Train acc: {tr_acc/len(tr_data_loader):.4f}, Val Loss: {val_loss/len(te_data_loader):.4f}, Val acc: {val_acc/len(te_data_loader):.4f}", flush = True)
 

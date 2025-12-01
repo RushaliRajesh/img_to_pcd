@@ -1,9 +1,8 @@
 #! /bin/bash
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
-#SBATCH --partition=airawatp   # GPU partition
-#SBATCH --gres=gpu:A100-SXM4:1 # Request 1 A100 GPU
-#SBATCH --time=20:00:00        
+#SBATCH --partition=airawatcp
+#SBATCH --time=48:00:00        
 #SBATCH --error=outputs/job.%J.err     # Error log (J = job ID)
 #SBATCH --output=outputs/job.%J.out    # Output log
 
@@ -30,15 +29,15 @@ cd $SLURM_SUBMIT_DIR
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cnn.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_hyp.py
-# python /nlsasfs/home/neol/rushar/dars_aug.py
+# python /nlsasfs/home/neol/rushar/dars_sept.py
+python /nlsasfs/home/neol/rushar/dars_oct.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_euc_zero.py
 
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_perci_cross.py
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_attn_samp.py
 
-# python /nlsasfs/home/neol/rushar/dars_oct.py
-python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_diff_ren.py
+
 # python train_cls.py train \
 # 	--dataroot /nlsasfs/home/neol/rushar/meshmae/MeshMAE/dataset_hdf5/ \
 # 	--batch_size 32 --augment_scale --n_classes 40 \
