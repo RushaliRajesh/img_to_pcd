@@ -38,7 +38,7 @@ from itertools import product
 from torch.utils.data import DataLoader 
 from dataset_combi import ShapeData_meta_h5_render_diff_ren, pairing_hdf5_meshes, All_meshes, All_sketches 
 from loss_util import ContrastiveLoss_hyp, Cross_entropy, compute_map, compute_metrics_hyp
-from renderer_py3d import Model_hyp_diff_ren
+from model_renderer_py3d import Model_hyp_diff_ren
 import time
 import os
 import pdb
@@ -47,7 +47,7 @@ import geoopt
 from pytorch3d.structures import join_meshes_as_batch
 
 
-keyword = "main_hyp_rendering_1_chn_sil2"
+keyword = "main_hyp_diff_ren_camera_param_changed"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -222,10 +222,11 @@ for epoch in tqdm(range(num_epochs)):
     all_pcd_enc = []
     all_img_labels = []
     all_pcd_labels = []
+    zero_count=0
     
     for ind,(sketches, pcds, target, pos_neg_ind) in enumerate(tr_data_loader):
-        # if ind==3:
-        #     break
+        if ind==3:
+            break
         sketches = sketches.float().to(device)
         pcds = pcds.to(device)
         label = target.long().to(device)
@@ -238,7 +239,7 @@ for epoch in tqdm(range(num_epochs)):
         # optimizer.zero_grad()
         opti.zero_grad()
         # pdb.set_trace()
-        sk_feat, sk_out, pc_feat, pc_out = model(sketches, pcds)
+        sk_feat, sk_out, pc_feat, pc_out, zero_count = model(sketches, pcds, zero_count)
                 
         loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
         loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
@@ -247,6 +248,34 @@ for epoch in tqdm(range(num_epochs)):
         acc = (acc1 + acc2) / 2
         # pdb.set_trace()
         loss.backward()
+
+        print("loss1:", loss1.item(), "loss2:", loss2.item(), "loss3:", loss3.item(), "total:", loss.item())
+        print("loss.requires_grad:", loss.requires_grad)
+
+        '''gradient check'''
+        # for n,p in model.named_parameters():
+        #     if p.requires_grad and p.grad is None:
+        #         print(f"WARNING: {n} has no gradient after epoch!")
+        #     elif p.requires_grad and p.grad is not None:
+        #         print(f"{n} grad max after epoch: {p.grad.abs().max()}")
+        #     elif p.requires_grad and p.grad.abs().max() < 1e-8:
+        #         print(f"WARNING: {n} has very small gradient after epoch: {p.grad.abs().max()}")
+        # print("full zero images:", zero_count)
+        
+        '''trainable params check'''
+        # p_list = {id(param): name for name, param in model.named_parameters()}
+        # for i, group in enumerate(opti.param_groups):
+        #     print(f"\nParam group {i}:")
+            
+        #     for p in group['params']:
+        #         pid = id(p)
+        #         if pid in p_list:
+        #             print(f"param is in the learnable list, named {p_list[pid]}")
+        #         else:
+        #             print(f"{p_list[pid]} not in trainable")
+                    
+        # pdb.set_trace()
+
         # optimizer.step()
         opti.step()
         tr_loss += loss.item()
@@ -271,12 +300,12 @@ for epoch in tqdm(range(num_epochs)):
         #         print(f"WARNING: {name} has no gradient!")
         #         print(ind)
         #         sys.exit()
+
         if ind==0:
             print("labels: ", label, flush=True)
             print("outputs sk: ", sk_out.argmax(dim=1), flush=True)
             print("outputs pc: ", pc_out.argmax(dim=1), flush=True)
-
-
+    
     model.eval()
     with torch.no_grad():   
         for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader): 
@@ -290,7 +319,7 @@ for epoch in tqdm(range(num_epochs)):
             if pcds == None:
                 continue
                     
-            sk_feat, sk_out, pc_feat, pc_out = model(sketches, pcds)
+            sk_feat, sk_out, pc_feat, pc_out, zero_count = model(sketches, pcds, zero_count)
                     
             loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
             loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
@@ -304,7 +333,7 @@ for epoch in tqdm(range(num_epochs)):
                 print("labels: ", label, flush=True)
                 print("outputs sk: ", sk_out.argmax(dim=1), flush=True)
                 print("outputs pc: ", pc_out.argmax(dim=1), flush=True)
-            
+        print("full zero images:", zero_count)    
     model.eval()
     with torch.no_grad():
         if epoch % 10 == 0:
@@ -316,7 +345,7 @@ for epoch in tqdm(range(num_epochs)):
             for skts, lab in zip(all_sketches, all_skt_labels):
                 skts = skts.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
-                sk_feat, _,_,_= model(skts, None)
+                sk_feat, _,_,_,_= model(skts, None)
                 all_img_enc.append(sk_feat.cpu().numpy())
                 all_img_labels.append(lab)
             # pdb.set_trace()
@@ -325,7 +354,7 @@ for epoch in tqdm(range(num_epochs)):
                 pcds = join_meshes_as_batch([pcd]).to(device)
                 # lab = lab.reshape(1,1)
                 # pdb.set_trace()
-                _, _, pc_feat, _ = model(None, pcds)
+                _, _, pc_feat, _, _ = model(None, pcds)
                 all_pcd_enc.append(pc_feat.cpu().numpy())
                 all_pcd_labels.append(lab)                            
             # pdb.set_trace()

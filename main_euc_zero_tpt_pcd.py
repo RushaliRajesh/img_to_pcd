@@ -45,7 +45,7 @@ import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 
-keyword = "cross_eucli_zero_shot_tpt_2_conti"
+keyword = "cross_eucli_zero_shot_tpt_2_pcd"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -173,7 +173,6 @@ cfg.freeze()
 
 # model = ModelCombi_norm_perci(cfg)
 model = ModelCombi_cross_perci_render_tpt(cfg=cfg, bs = B, adapter=True, classes_total=classes_total_num)
-model.load_state_dict(torch.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_eucli_zero_shot_tpt_2/model.pt"))
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
@@ -199,7 +198,7 @@ opti = torch.optim.Adam(model.parameters(), lr=0.0001)
 #     cfg.SOLVER)
 con_loss = ContrastiveLoss()
 
-for epoch in tqdm(range(71, num_epochs)):
+for epoch in tqdm(range(num_epochs)):
     model.train()
     tr_loss = 0.0
     val_loss = 0.0

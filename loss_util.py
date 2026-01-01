@@ -2,6 +2,65 @@ import torch
 import pdb
 import torch.nn.functional as F
 import geoopt
+import numpy as np
+
+
+def eval_process_labels(query_feats, gallery_feats, query_labels, gallery_labels):
+    query_feats = F.normalize(query_feats, dim=1) # 4, 768
+    gallery_feats = F.normalize(gallery_feats, dim=1) # 4, 768
+    # pdb.set_trace()
+
+    # Compute cosine similarity
+    similarity_matrix = torch.mm(query_feats, gallery_feats.t()) # 4,4
+
+    # Get the indices of the sorted similarities
+    _, sorted_indices = torch.sort(similarity_matrix, dim=1, descending=True) # 4,4
+
+    # Initialize variables to compute mAP
+    num_queries = query_feats.size(0)
+    map = []
+    ft = []
+    st = []
+    nn = []
+
+    for i in range(num_queries): # 4
+        pdb.set_trace()
+        query_labels = query_labels.numpy()
+        query_label = query_labels[i]
+        sorted_gallery_labels = gallery_labels[sorted_indices[i]] #4
+        map.append(mean_average_precision(query_label, sorted_gallery_labels.numpy()))
+        ft.append(first_tier(query_label, sorted_gallery_labels.numpy()))
+        st.append(second_tier(query_label, sorted_gallery_labels.numpy()))
+        nn.append(nearest_neighbor(query_label, sorted_gallery_labels.numpy()))
+    return np.array(map).mean(), np.array(ft).mean(), np.array(st).mean(), np.array(nn).mean()
+
+
+def nearest_neighbor(q_label, retrieved_labels):
+    return int(q_label == retrieved_labels[0])
+
+
+def first_tier(q_label, retrieved_labels):
+    n_relevant_objs = (retrieved_labels == q_label).sum()
+    retrieved_1st_tier = retrieved_labels[:n_relevant_objs]
+    return (retrieved_1st_tier == q_label).mean()
+
+
+def second_tier(q_label, retrieved_labels):
+    n_relevant_objs = (retrieved_labels == q_label).sum()
+    retrieved_2nd_tier = retrieved_labels[:2*n_relevant_objs]
+    return (retrieved_2nd_tier == q_label).mean() * 2
+
+
+def mean_average_precision(q_label, retrieved_labels):
+    score = 0.0
+    num_hits = 0.0
+
+    for i, p in enumerate(retrieved_labels):
+        if p == q_label and p not in retrieved_labels[:i]:
+            num_hits += 1.0
+            score += num_hits / (i+1.0)
+
+    return score
 
 class Cross_entropy(torch.nn.Module):
     def __init__(self):

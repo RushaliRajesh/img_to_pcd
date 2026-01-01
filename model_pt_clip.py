@@ -7,6 +7,7 @@ import yaml
 import pdb
 from fvcore.common.config import CfgNode as _CfgNode
 from torch.nn import MultiheadAttention
+import math
 
 # Add the project root directory to the Python path
 # This allows absolute imports like 'vpt_workspace...' to work
@@ -161,8 +162,8 @@ class ModelCombi_norm_w_avg(nn.Module):
 class CrossAttentionLayer(nn.Module):
     def __init__(self, latent_dim, feature_size):
         super(CrossAttentionLayer, self).__init__()
-        self.feature_size = feature_size
-
+        # self.feature_size = feature_size
+        self.latent_dim = latent_dim
         self.key = nn.Linear(feature_size, latent_dim)
         self.query = nn.Linear(latent_dim, latent_dim)
         self.value = nn.Linear(feature_size, latent_dim)
@@ -174,7 +175,8 @@ class CrossAttentionLayer(nn.Module):
         values = self.value(x)
 
         #Scaled dot-product 
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.feature_size, dtype=torch.float32))
+        # scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(self.feature_size, dtype=torch.float32))
+        scores = torch.matmul(queries, keys.transpose(-2, -1)) / math.sqrt(self.latent_dim)
         # print("scores shape", scores.shape)  # [batch_size, seq_len, seq_len]
        
         attention_weights = F.softmax(scores, dim=-1)
@@ -394,6 +396,132 @@ class ModelCombi_cross_perci_render(nn.Module):
             ptcloud_output_final = self.res(ptcloud_feat)
 
         return img_feat, img_output, ptcloud_feat, ptcloud_output_final
+
+
+
+class ModelCombi_cross_perci_render_tpt(nn.Module):
+    def __init__(self, bs, cfg=None, adapter = False, classes_total=48):
+        super(ModelCombi_cross_perci_render_tpt, self).__init__()
+        self.bs = bs
+        if adapter:
+            self.adapter_skt = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+            self.adapter_pcd = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+        self.vpt_2d, self.model = build_model(cfg)
+        self.pcviews = ut.PCViews()
+        #10 views, thats why 10,768
+        self.query =  torch.nn.Parameter(torch.ones(10, 128), requires_grad=True)
+        self.attn = CrossAttentionLayer(128, 768)
+        self.intermediate = torch.nn.Linear(128, 768)
+        self.res = torch.nn.Linear(768, classes_total)
+        # pdb.set_trace()
+        # self.extra = torch.nn.Parameter(torch.randn(bs, 768), requires_grad=True)
+        # self.lin_ent = torch.nn.Conv1d(1, 1, kernel_size=3, padding=1)
+        self.extra = torch.nn.Parameter(torch.randn(5), requires_grad=True)
+        self.lin_ent = torch.nn.Linear(768, classes_total)
+
+    def forward(self, img, render_imgs):
+        img_feat, img_output, ptcloud_feat, ptcloud_output_final, ptcloud_output = None, None, None, None, None
+        if img is not None:
+            if hasattr(self, 'adapter_skt'):
+                img = self.adapter_skt(img)
+            img_feat, img_output = self.vpt_2d(img) 
+        if render_imgs is not None:
+            # pcds_img = self.pcviews.get_img(ptcloud)
+            # pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
+            # pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
+            # pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            bs = render_imgs.shape[0]
+            # render_imgs = render_imgs.reshape(-1, 3, 224, 224)
+            if hasattr(self, 'adapter_pcd'):
+                # render_imgs = self.adapter_pcd(render_imgs)
+                extra = self.extra.repeat(self.bs)
+                extra = extra.reshape(self.bs, 5)
+                extra=extra[:, :, None, None, None]
+                render_imgs = render_imgs*extra
+                # print("render_imgs shape after extra: ", render_imgs.shape)
+                # print("render_imgs shape before extra: ", render_imgs.shape)
+                render_imgs = render_imgs.reshape(-1, 3, 224, 224) 
+                # render_imgs = self.adapter_pcd(render_imgs)  #tpt2
+            # pdb.set_trace()
+            ptcloud_feat, ptcloud_output = self.vpt_2d(render_imgs)
+
+            ptcloud_feat = ptcloud_feat.reshape(bs, -1, ptcloud_feat.shape[1])
+
+            # print(ptcloud_feat.shape)
+            attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
+            # pdb.set_trace()
+            ptcloud_feat = ptcloud_feat.mean(dim=1)
+            # pdb.set_trace()
+            ptcloud_feat = self.intermediate(ptcloud_feat)
+            ptcloud_output_final = self.res(ptcloud_feat)
+            # pdb.set_trace()
+        return img_feat, img_output, ptcloud_feat, ptcloud_output_final, ptcloud_output
+
+
+class ModelCombi_cross_perci_render_entropy(nn.Module):
+    def __init__(self, bs, cfg=None, adapter = False, classes_total=48):
+        super(ModelCombi_cross_perci_render_entropy, self).__init__()
+
+        if adapter:
+            self.adapter_skt = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+            self.adapter_pcd = nn.Sequential(
+                nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 3, kernel_size=3, stride=1, padding=1)
+            )
+        self.vpt_2d, self.model = build_model(cfg)
+        self.pcviews = ut.PCViews()
+        #10 views, thats why 10,768
+        self.query =  torch.nn.Parameter(torch.ones(10, 128), requires_grad=True)
+        self.attn = CrossAttentionLayer(128, 768)
+        self.intermediate = torch.nn.Linear(128, 768)
+        self.res = torch.nn.Linear(768, classes_total)
+        # pdb.set_trace()
+
+    def forward(self, img, render_imgs, tag = "train", extra=None):
+        img_feat, img_output, ptcloud_feat, ptcloud_output_final = None, None, None, None
+        if img is not None:
+            if hasattr(self, 'adapter_skt'):
+                img = self.adapter_skt(img)
+            img_feat, img_output = self.vpt_2d(img)
+        if render_imgs is not None:
+            # pcds_img = self.pcviews.get_img(ptcloud)
+            # pcds_img = pcds_img.unsqueeze(1).repeat(1, 3, 1, 1)
+            # pcds_img = pcds_img/max(pcds_img.max(), 1e-8) 
+            # pcds_img = functional.normalize(pcds_img, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            bs = render_imgs.shape[0]
+            render_imgs = render_imgs.reshape(-1, 3, 224, 224)
+            if hasattr(self, 'adapter_pcd'):
+                render_imgs = self.adapter_pcd(render_imgs)
+            # pdb.set_trace()
+            ptcloud_feat, ptcloud_output = self.vpt_2d(render_imgs)
+            ptcloud_feat = ptcloud_feat.reshape(bs, -1, ptcloud_feat.shape[1])
+            attn_weights, ptcloud_feat = self.attn(ptcloud_feat, self.query)
+            # pdb.set_trace()
+            ptcloud_feat = ptcloud_feat.mean(dim=1)
+            ptcloud_feat = self.intermediate(ptcloud_feat)
+            if tag=="test":
+                ptcloud_feat = ptcloud_feat + extra
+            ptcloud_output_final = self.res(ptcloud_feat)
+
+        return img_feat, img_output, ptcloud_feat, ptcloud_output_final
+
 
 
 

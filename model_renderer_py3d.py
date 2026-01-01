@@ -589,7 +589,7 @@ class Model_hyp_diff_ren(nn.Module):
         self.manifold = geoopt.PoincareBall(c=1.0, learnable=True)
         self.hyp_relu = hyperbolic_ReLU
         self.camera_position = nn.Parameter(
-            torch.from_numpy(np.array([3.0,  6.9, +2.5], dtype=np.float32)).to(self.device))
+            torch.from_numpy(np.array([3.0,  6.9, +0.5], dtype=np.float32)).to(self.device))
         # 1-channel silhouette input
         self.cnn = nn.Sequential(
             nn.Conv2d(1, 32, 3, stride=2, padding=1),
@@ -604,7 +604,7 @@ class Model_hyp_diff_ren(nn.Module):
         )
 
 
-    def forward(self, img, mesh):
+    def forward(self, img, mesh, zero_count=0):
         img_feat, img_output, mesh_feat, mesh_output_final = None, None, None, None
         if img is not None:
             if hasattr(self, 'adapter_skt'):
@@ -631,8 +631,14 @@ class Model_hyp_diff_ren(nn.Module):
             # mesh_feat, mesh_output = self.vpt_2d(ren_image.repeat(1,3,1,1))
             # ren_image = (ren_image - ren_image.mean()) / (ren_image.std() + 1e-6)4
             alpha = ren_image[..., 3]          # (B, H, W)
+            tensor_2_img(alpha[0], "check_img", "img")
             alpha = alpha.unsqueeze(1)         # (B, 1, H, W)
-            alpha = alpha.clamp(0, 1)
+            # alpha = alpha.clamp(0, 1)
+            blank_mask = (alpha == 0).all(dim=(1,2,3))
+            zero_count += blank_mask.sum().item()
+            # print("sum of all the silhouttes", torch.sum(alpha, dim=(1,2,3)), flush=True)
+            if zero_count!=0:
+                print("Zero silhouette count so far: ", zero_count, flush=True)
             # pdb.set_trace()
             mesh_feat = self.cnn(alpha)
             mesh_feat = self.manifold.expmap0(mesh_feat)
@@ -644,7 +650,7 @@ class Model_hyp_diff_ren(nn.Module):
             # print(image.shape)
             
             # pdb.set_trace()
-        return img_feat, img_output, mesh_feat, mesh_output_final
+        return img_feat, img_output, mesh_feat, mesh_output_final, zero_count
 
 
 

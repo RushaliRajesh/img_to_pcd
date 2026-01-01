@@ -38,7 +38,14 @@ cd $SLURM_SUBMIT_DIR
 # python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_cross_attn_samp.py
 
 # python /nlsasfs/home/neol/rushar/dars_oct.py
-python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_diff_ren.py
+
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_diff_ren.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_euc_zero_entropy.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_euc_zero.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_euc_zero_tpt.py
+# python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_conti_model.py
+python /nlsasfs/home/neol/rushar/scripts/img_to_pcd/main_euc_zero_tpt_eval_validate.py
+
 # python train_cls.py train \
 # 	--dataroot /nlsasfs/home/neol/rushar/meshmae/MeshMAE/dataset_hdf5/ \
 # 	--batch_size 32 --augment_scale --n_classes 40 \

@@ -511,6 +511,53 @@ class ShapeData_meta_h5_render(Dataset):
         return (sketch, torch.stack(mesh_imgs, dim=0), torch.tensor(skt_cls_id), torch.tensor(pos_neg_ind))
 
 
+
+class ShapeData_meta_h5_pcd(Dataset):
+    def __init__(self, pairs, transform=None):
+        self.pairs = pairs 
+        self.transform = transform  
+        
+    def __len__(self):
+        return len(self.pairs)
+    
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_image(path):
+        # print(f"Loading from disk: {path}")
+        img = Image.open(path).convert("RGB")
+        return img
+
+    @staticmethod
+    @lru_cache(maxsize=100)  
+    def load_pcd(path):
+        # print(f"Loading from disk: {path}")
+        pcd = np.load(path)
+        return pcd
+
+    def __getitem__(self, index):
+
+        sketch_path, model_path, skt_cls_id, pcd_cls_id, skt_class, pcd_class, pos_neg_ind = self.pairs[index]
+        
+        if skt_cls_id != pcd_cls_id and pos_neg_ind == 0:
+            print("sketch class id and pcd class id do not match")
+            print("sketch class id: ", skt_cls_id, "pcd class id: ", pcd_cls_id)
+            sys.exit()
+        pcd = self.load_pcd(model_path)
+        if len(pcd) == 0:
+            return None, None, None
+
+        sketch = self.load_image(sketch_path)
+
+        if self.transform:
+            sketch = self.transform(sketch)
+
+        # pdb.set_trace()
+        # print("diff rend")
+        return {'sketch': sketch, "pcd":pcd, "skt_class":torch.tensor(skt_cls_id), "pos_neg":torch.tensor(pos_neg_ind)}
+
+
+
+
 class ShapeData_meta_h5_render_diff_ren(Dataset):
     def __init__(self, pairs, transform=None):
         self.pairs = pairs 
@@ -531,6 +578,32 @@ class ShapeData_meta_h5_render_diff_ren(Dataset):
     def load_mesh(path):
         # print(f"Loading from disk: {path}")
         mesh = IO().load_mesh(path)
+        verts = mesh.verts_packed()
+        center = verts.mean(0)
+        scale = max((verts - center).abs().max(0)[0])
+        mesh.offset_verts_(-center)
+        if verts.min() < -1.0 or verts.max() > 1.0:
+            print("mesh verts out of range")
+            mesh.scale_verts_((1.0 / float(scale)))
+            verts_new = mesh.verts_packed()
+            print("new min, max and center: ", verts_new.min(), verts_new.max(), verts_new.mean(0))
+       
+        return mesh
+
+        center = verts.mean(0)
+        # verts = verts - center
+        mesh.offset_verts_(-center)
+        verts = mesh.verts_packed()
+        if verts.min() < -1.0 or verts.max() > 1.0:
+            print("mesh verts out of range")
+            scale = max(torch.norm(verts, dim=1).max(), 1e-8)
+            mesh.scale_verts_((1.0 / float(scale)))
+            # scale = max((verts - center).abs().max(0)[0])
+            # verts = verts / scale
+            pdb.set_trace()
+            
+            print("new min: ", verts.min(), "new max: ", verts.max())
+        
         return mesh
 
     def __getitem__(self, index):

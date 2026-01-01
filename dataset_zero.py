@@ -252,7 +252,7 @@ def pairing_hdf5(skt_path, model_path, label, all_classes, zs_classes):
     pcd_zs = pcd_hdf5[pcd_hdf5['class_id'].isin(zs_classes)]
     pairs = []
 
-    pdb.set_trace()
+    # pdb.set_trace()
     
     for i in skt_fs.itertuples():
         sk_cls = i.cat

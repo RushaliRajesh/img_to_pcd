@@ -5,6 +5,7 @@ import yaml
 from fvcore.common.config import CfgNode as _CfgNode
 from tqdm import tqdm
 from torchvision.transforms import ToPILImage
+import torchvision.transforms
 
 # Add the project root directory to the Python path
 # This allows absolute imports like 'vpt_workspace...' to work
@@ -37,7 +38,7 @@ from itertools import product
 from torch.utils.data import DataLoader 
 from dataset_zero import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
 from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_all_metrics
-from model_pt_clip import ModelCombi_cross_perci_render_tpt
+from model_pt_clip import ModelCombi_cross_perci_render_entropy
 import time
 import os
 import pdb
@@ -45,11 +46,12 @@ import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 
-keyword = "cross_eucli_zero_shot_tpt_2_conti"
+keyword = "cross_eucli_zero_shot_entropy_tpt"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
 B =16     
+tpt_runs =2
 
 transform_img = transforms.Compose([
         transforms.Resize((224, 224)),  # Resize to match ResNet input size
@@ -172,8 +174,7 @@ cfg.freeze()
 
 
 # model = ModelCombi_norm_perci(cfg)
-model = ModelCombi_cross_perci_render_tpt(cfg=cfg, bs = B, adapter=True, classes_total=classes_total_num)
-model.load_state_dict(torch.load("/nlsasfs/home/neol/rushar/scripts/img_to_pcd/saved_models/cross_eucli_zero_shot_tpt_2/model.pt"))
+model = ModelCombi_cross_perci_render_entropy(cfg=cfg, bs = B, adapter=False, classes_total=classes_total_num)
 # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # ce_loss = torch.nn.CrossEntropyLoss()
 ce_loss = Cross_entropy()
@@ -185,6 +186,16 @@ num_epochs = 101
 #     [model],
 #     cfg.SOLVER
 # )
+
+opti = torch.optim.Adam(model.parameters(), lr=0.0001)
+
+# scheduler = make_scheduler(
+#     opti,
+#     cfg.SOLVER)
+
+scaler = torch.amp.GradScaler("cuda",init_scale=1000)
+con_loss = ContrastiveLoss()
+
 def avg_entropy(outputs):
     logits = outputs - outputs.logsumexp(dim=-1, keepdim=True) # logits = outputs.log_softmax(dim=1) [N, 1000]
     avg_logits = logits.logsumexp(dim=0) - np.log(logits.shape[0]) # avg_logits = logits.mean(0) [1, 1000]
@@ -192,14 +203,38 @@ def avg_entropy(outputs):
     avg_logits = torch.clamp(avg_logits, min=min_real)
     return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1)
 
-opti = torch.optim.Adam(model.parameters(), lr=0.0001)
+def tpt_tuning(sketches, pcds, label, pos_neg_ind):
+    model.eval()
+    extra = torch.nn.parameter.Parameter(torch.randn((sketches.shape[0],768), device=device))
+    opt2 = torch.optim.Adam([extra], lr=0.01)
+    skt2 = torchvision.transforms.RandomHorizontalFlip(p=1.0).forward(sketches)
+    # skt3 = torchvision.transforms.RandomCrop(124).forward(sketches)
+    skt4 = torchvision.transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3).forward(sketches)
+    skt5 = torchvision.transforms.RandomVerticalFlip(p=1.0).forward(sketches)
+    all_skts = [sketches,skt2,skt4,skt5]
 
-# scheduler = make_scheduler(
-#     opti,
-#     cfg.SOLVER)
-con_loss = ContrastiveLoss()
+    
+    for i in range(tpt_runs):
+        sk_out_list = []
+        pc_out_list = []
+        with torch.amp.autocast("cuda"):
 
-for epoch in tqdm(range(71, num_epochs)):
+            for img in all_skts:
+                sk_feat, sk_out, pc_feat, pc_out = model(img, pcds, tag="test", extra=extra)
+                sk_out_list.append(sk_out)
+                pc_out_list.append(pc_out)
+            sk_out_list = torch.stack(sk_out_list, dim=0).to(device)
+            pc_out_list = torch.stack(pc_out_list, dim=0).to(device)
+            loss = avg_entropy(sk_out_list) + avg_entropy(pc_out_list)
+            loss = loss.mean()
+            opt2.zero_grad()
+            # pdb.set_trace()
+            scaler.scale(loss).backward()
+            scaler.step(opt2)
+            scaler.update()
+    return extra.detach()
+
+for epoch in tqdm(range(num_epochs)):
     model.train()
     tr_loss = 0.0
     val_loss = 0.0
@@ -212,6 +247,8 @@ for epoch in tqdm(range(71, num_epochs)):
     all_pcd_enc = []
     all_img_labels = []
     all_pcd_labels = []
+    for p in model.parameters():
+        p.requires_grad_(True)
     
     for ind,(sketches, pcds, target, pos_neg_ind) in enumerate(tr_data_loader):
         # if ind==3:
@@ -228,14 +265,12 @@ for epoch in tqdm(range(71, num_epochs)):
         # optimizer.zero_grad()
         opti.zero_grad()
         # pdb.set_trace()
-        sk_feat, sk_out, pc_feat, pc_out, pc_out_ent = model(sketches, pcds)
+        sk_feat, sk_out, pc_feat, pc_out = model(sketches, pcds, tag="train")
                 
         loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
         loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
         loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind)
-        loss4 = avg_entropy(pc_out_ent)
-        loss4 = loss4.mean()
-        loss = loss1+loss2+loss3+loss4
+        loss = loss1+loss2+loss3
         acc = (acc1 + acc2) / 2
         # pdb.set_trace()
         loss.backward()
@@ -270,26 +305,27 @@ for epoch in tqdm(range(71, num_epochs)):
 
 
     model.eval()
-    with torch.no_grad():   
-        for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader):
-            # if ind==3:
-            #     break
-            sketches = sketches.float().to(device)
-            pcds = pcds.float().to(device)
-            label = target.long().to(device)
-            pos_neg_ind = pos_neg_ind.to(device)
+    for p in model.parameters():
+        p.requires_grad_(False)
+    for ind, (sketches, pcds, target, pos_neg_ind) in enumerate(te_data_loader):
+        # if ind==3:
+        #     break
+        sketches = sketches.float().to(device)
+        pcds = pcds.float().to(device)
+        label = target.long().to(device)
+        pos_neg_ind = pos_neg_ind.to(device)
 
-            if pcds == None:
-                continue
-                    
-            sk_feat, sk_out, pc_feat, pc_out, pc_out_ent = model(sketches, pcds)
+        if pcds == None:
+            continue
+                
+        extra = tpt_tuning(sketches, pcds, label, pos_neg_ind)
+        with torch.no_grad():
+            sk_feat, sk_out, pc_feat, pc_out = model(sketches, pcds, tag="test", extra= extra)
                     
             loss1, acc1 = ce_loss(sk_out, label, pos_neg_ind) 
             loss2, acc2 = ce_loss(pc_out, label, pos_neg_ind) 
             loss3 = con_loss(sk_feat, pc_feat, pos_neg_ind)
-            loss4 = avg_entropy(pc_out_ent)
-            loss4 = loss4.mean()
-            loss = loss1+loss2+loss3+loss4
+            loss = loss1+loss2+loss3
             acc = (acc1 + acc2) / 2
             val_loss += loss.item()
             val_acc += acc.item()
@@ -310,7 +346,7 @@ for epoch in tqdm(range(71, num_epochs)):
             for skts, lab in zip(all_sketches_fs, all_skt_labels_fs):
                 skts = skts.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
-                sk_feat, _,_,_,_= model(skts, None)
+                sk_feat, _,_,_= model(skts, None, tag="train")
                 all_img_enc.append(sk_feat.cpu().numpy())
                 all_img_labels.append(lab)
             # pdb.set_trace()
@@ -318,7 +354,7 @@ for epoch in tqdm(range(71, num_epochs)):
                 pcds = pcd.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
                 # pdb.set_trace()
-                _, _, pc_feat, _, _ = model(None, pcds)
+                _, _, pc_feat, _ = model(None, pcds, tag="train")
                 all_pcd_enc.append(pc_feat.cpu().numpy())
                 all_pcd_labels.append(lab)                            
             # pdb.set_trace()
@@ -348,7 +384,7 @@ for epoch in tqdm(range(71, num_epochs)):
             for skts, lab in zip(all_sketches_zs, all_skt_labels_zs):
                 skts = skts.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
-                sk_feat, _,_,_,_= model(skts, None)
+                sk_feat, _,_,_= model(skts, None, tag="train")
                 all_img_enc.append(sk_feat.cpu().numpy())
                 all_img_labels.append(lab)
             # pdb.set_trace()
@@ -356,7 +392,7 @@ for epoch in tqdm(range(71, num_epochs)):
                 pcds = pcd.float().to(device).unsqueeze(0)
                 # lab = lab.reshape(1,1)
                 # pdb.set_trace()
-                _, _, pc_feat, _,_ = model(None, pcds)
+                _, _, pc_feat, _ = model(None, pcds, tag="train")
                 all_pcd_enc.append(pc_feat.cpu().numpy())
                 all_pcd_labels.append(lab)                            
             # pdb.set_trace()

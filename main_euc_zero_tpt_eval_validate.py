@@ -36,7 +36,7 @@ import numpy as np
 from itertools import product
 from torch.utils.data import DataLoader 
 from dataset_zero import ShapeData_meta_h5_render, pairing_hdf5, All_rendered_imgs, All_sketches 
-from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_all_metrics
+from loss_util import ContrastiveLoss, Cross_entropy, compute_map, compute_all_metrics, eval_process_labels
 from model_pt_clip import ModelCombi_cross_perci_render_tpt
 import time
 import os
@@ -45,7 +45,7 @@ import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 
-keyword = "cross_eucli_zero_shot_tpt_2_conti"
+keyword = "cross_eucli_zero_shot_tpt_2_eval_verify"
 writer = SummaryWriter(f'runs/{keyword}')
 print("keyword: ", keyword)
 
@@ -199,7 +199,7 @@ opti = torch.optim.Adam(model.parameters(), lr=0.0001)
 #     cfg.SOLVER)
 con_loss = ContrastiveLoss()
 
-for epoch in tqdm(range(71, num_epochs)):
+for epoch in tqdm(range(70, 85)):
     model.train()
     tr_loss = 0.0
     val_loss = 0.0
@@ -329,10 +329,14 @@ for epoch in tqdm(range(71, num_epochs)):
 
 
             # Compute mAP
+            print(epoch)
             # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
             mAP, ft, st, nn = compute_all_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
                                 torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
+            mAP2, ft2, st2, nn2 = eval_process_labels(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
+                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
             print(f"Epoch [{epoch+1}/{num_epochs}], mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}, nn: {nn:.4f}", flush = True)
+            print(f"Epoch [{epoch+1}/{num_epochs}], mAP2: {mAP2:.4f}, ft2: {ft2:.4f}, st2: {st2:.4f}, nn2: {nn2:.4f}", flush = True)
             writer.add_scalar('mAP', mAP, epoch)
             writer.add_scalar('ft', ft, epoch)
             writer.add_scalar('st', st, epoch)
@@ -370,7 +374,10 @@ for epoch in tqdm(range(71, num_epochs)):
             # print(np.array(all_img_enc).shape, np.array(all_pcd_enc).shape, np.array(all_img_labels).shape, np.array(all_pcd_labels).shape)
             mAP, ft, st, nn = compute_all_metrics(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
                                 torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
+            mAP2, ft2, st2, nn2 = eval_process_labels(torch.tensor(all_img_enc), torch.tensor(all_pcd_enc), 
+                                torch.tensor(all_img_labels), torch.tensor(all_pcd_labels))
             print(f"Epoch [{epoch+1}/{num_epochs}], zeroshot results: mAP: {mAP:.4f}, ft: {ft:.4f}, st: {st:.4f}, nn: {nn:.4f}", flush = True)
+            print(f"Epoch [{epoch+1}/{num_epochs}], zeroshot results: mAP2: {mAP2:.4f}, ft2: {ft2:.4f}, st2: {st2:.4f}, nn2: {nn2:.4f}", flush = True)
             writer.add_scalar('mAP', mAP, epoch)
             writer.add_scalar('ft', ft, epoch)
             writer.add_scalar('st', st, epoch)
